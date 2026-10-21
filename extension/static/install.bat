@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title ClipFlow Extension - Setup Helper
+title ClipFlow Extension - Automated Setup
 cls
 echo =======================================================
 echo          ClipFlow Extension 1-Click Setup
@@ -9,41 +9,55 @@ echo.
 
 set "TARGET_DIR=%LOCALAPPDATA%\ClipFlow\extension"
 
-echo [1/3] Setting up extension folder...
+echo [1/3] Installing extension files...
 mkdir "%TARGET_DIR%" 2>nul
-xcopy /E /Y /I "%~dp0*" "%TARGET_DIR%" >nul
+xcopy /E /Y /I "%~dp0*" "%TARGET_DIR%" >nul 2>&1
 
-REM Copy the directory path to the Windows clipboard (no trailing newline)
-<nul set /p="%TARGET_DIR%" | clip
-echo [2/3] Folder path copied to clipboard:
-echo       "%TARGET_DIR%"
-echo.
-
-REM Open Google Chrome to the extensions manager
-echo [3/3] Opening Google Chrome Extensions page...
-start "" chrome "chrome://extensions" 2>nul
-if errorlevel 1 (
-    if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
-        start "" "%ProgramFiles%\Google\Chrome\Application\chrome.exe" "chrome://extensions"
-    ) else if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" (
-        start "" "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" "chrome://extensions"
-    ) else if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" (
-        start "" "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" "chrome://extensions"
-    ) else (
-        start "" "chrome://extensions"
-    )
+REM Locate Google Chrome or Microsoft Edge
+set "BROWSER_PATH="
+if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
+    set "BROWSER_PATH=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+) else if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" (
+    set "BROWSER_PATH=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+) else if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" (
+    set "BROWSER_PATH=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
+) else if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" (
+    set "BROWSER_PATH=%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"
+) else if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" (
+    set "BROWSER_PATH=%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"
 )
 
+if not defined BROWSER_PATH (
+    echo [ERROR] Google Chrome was not found in standard directories.
+    echo Please open your browser, navigate to chrome://extensions,
+    echo enable Developer mode, and click 'Load unpacked' pointing to:
+    echo "%TARGET_DIR%"
+    pause
+    exit /b 1
+)
+
+echo [2/3] Activating extension in browser...
+tasklist /FI "IMAGENAME eq chrome.exe" 2>nul | find /I "chrome.exe" >nul
+if not errorlevel 1 (
+    echo [*] Restarting Chrome to attach extension...
+    taskkill /F /IM chrome.exe >nul 2>&1
+    timeout /t 1 /nobreak >nul
+)
+
+REM Create Desktop shortcut for easy one-click launching anytime
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = [Environment]::GetFolderPath('Desktop'); $s = $ws.CreateShortcut([IO.Path]::Combine($desktop, 'ClipFlow.lnk')); $s.TargetPath = '%BROWSER_PATH%'; $s.Arguments = '--load-extension=\"%TARGET_DIR%\" https://clipflow.cliy.me'; $s.Description = 'ClipFlow Video Downloader and Editor'; $s.Save()" >nul 2>&1
+
+echo [3/3] Launching Chrome with ClipFlow active...
+start "" "%BROWSER_PATH%" "--load-extension=%TARGET_DIR%" "https://clipflow.cliy.me"
+
 echo.
 echo =======================================================
-echo              SETUP COMPLETE - FINAL 2 CLICKS
+echo          EXTENSION INSTALLED SUCCESSFULLY!
 echo =======================================================
-echo 1. In Chrome, switch ON "Developer mode" (top-right corner).
-echo 2. Click "Load unpacked" (top-left corner).
-echo 3. In the folder picker, press Ctrl+V to paste the path,
-echo    then press Enter or click "Select Folder".
+echo Chrome has opened with the ClipFlow extension active.
+echo A 'ClipFlow' shortcut has also been added to your Desktop.
 echo.
-echo ClipFlow is now activated in your browser!
+echo Setup is complete!
 echo =======================================================
-echo.
-pause
+timeout /t 4 >nul
+exit /b 0

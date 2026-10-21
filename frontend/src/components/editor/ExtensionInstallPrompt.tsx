@@ -67,18 +67,18 @@ export default function ExtensionInstallPrompt({ onClose, onDetected, reason = '
             </a>
 
             <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-300">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-blue-400">Easy 3-step setup:</div>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-blue-400">1-Click Automated Setup:</div>
               <ol className="list-decimal space-y-1.5 pl-4 leading-relaxed">
-                <li>Unzip <b className="text-white">clipflow-extension.zip</b> on your device.</li>
+                <li>Unzip <b className="text-white">clipflow-extension.zip</b> on your computer.</li>
                 <li>
-                  Double-click <b className="text-white">install.bat</b> inside the folder (it copies the path and opens Chrome).
+                  Double-click <b className="text-white">install.bat</b> inside the unzipped folder.
                 </li>
                 <li>
-                  In Chrome (<span className="font-mono text-white">chrome://extensions</span>), turn on <b className="text-white">Developer mode</b>, click <b className="text-white">Load unpacked</b>, press <b className="text-white">Ctrl+V</b>, and hit Enter.
+                  Done! Chrome launches automatically with the ClipFlow extension active.
                 </li>
               </ol>
               <div className="pt-2 text-[11px] text-slate-400 border-t border-white/5">
-                <span className="text-slate-500">Mac/Linux:</span> Unzip and select the folder directly via <b className="text-slate-300">Load unpacked</b>.
+                <span className="text-slate-500">Mac/Linux:</span> In <span className="font-mono text-slate-300">chrome://extensions</span>, turn on Developer mode and select the unzipped folder via <b className="text-slate-300">Load unpacked</b>.
               </div>
             </div>
           </div>
