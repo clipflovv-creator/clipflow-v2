@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { api } from '../../services/api';
+import { extensionBridge } from '../../services/extensionBridge';
 
 export interface TwitchQualityOption {
   id: string;
@@ -55,7 +55,7 @@ export function useTwitchPreview(
     !activeUrl.includes('/clip')
   );
 
-  const fetchTwitchStream = useCallback(async (forceRefresh = false) => {
+  const fetchTwitchStream = useCallback(async (_forceRefresh = false) => {
     if (!isTwitch || !activeUrl) return;
 
     if (abortControllerRef.current) {
@@ -69,30 +69,27 @@ export function useTwitchPreview(
     setStreamError('');
 
     try {
-      const res = await api.twitch.getStreamInfo(targetUrl, {
-        quality,
-        forceRefresh,
-        signal: abortController.signal,
-      });
+      // Resolved by the ClipFlow extension with the user's own Twitch login and IP.
+      console.log('[Twitch preview] resolving', targetUrl, 'quality', quality);
+      const { info, variants } = await extensionBridge.getTwitchStreams(targetUrl);
+      // Results are shared per link (bridge cache), so a newer request for the same link gets the same answer;
+      // only drop this one if the user switched to a different link meanwhile.
+      if (abortController.signal.aborted && targetUrl !== (metadata?.webpage_url || activeUrl)) return;
+      if (!variants.length) throw new Error('No playable Twitch streams found');
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(errorData.error || `HTTP ${res.status}`);
-      }
+      const wantedHeight = parseInt(String(quality || ''), 10);
+      const chosen = (wantedHeight && variants.find((v) => v.height === wantedHeight)) || variants[0];
+      console.log('[Twitch preview] streams from extension:', info.kind, variants.map((v) => v.label), '→', chosen.label);
 
-      const data = await res.json();
-
-      if (data.streamUrl) {
-        setTwitchHlsUrl(data.streamUrl);
-        setSourceType(data.sourceType || (isTwitchLiveChannel ? 'dvr' : 'vod'));
-        setVodId(data.vodId);
-        setChannel(data.channel);
-        setMasterPlaylistUrl(data.masterPlaylistUrl);
-        setQualities(data.qualities || []);
-        setIsLoadingStream(false);
-      } else {
-        throw new Error('Stream URL missing from stream-info response');
-      }
+      setTwitchHlsUrl(chosen.url);
+      setSourceType(info.kind === 'live' ? 'live' : info.kind === 'vod' ? 'vod' : 'clip');
+      setVodId(info.kind === 'vod' ? info.id : undefined);
+      setChannel(info.kind === 'live' ? info.id : info.author);
+      setMasterPlaylistUrl(undefined);
+      setQualities(variants.filter((v) => v.height > 0).map((v) => ({
+        id: v.id, label: v.label, height: v.height, bandwidth: 0, url: v.url,
+      })));
+      setIsLoadingStream(false);
     } catch (err: any) {
       if (err.name === 'AbortError') return;
       console.error('%c[Twitch HLS Preview ❌ ERROR FETCHING STREAM INFO]', 'color: #ef4444; font-weight: bold;', err);

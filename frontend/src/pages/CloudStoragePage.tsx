@@ -7,24 +7,36 @@ import {
   AlertCircle,
   CheckCircle2,
   RefreshCw,
-  Crown,
   FileVideo,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
+import { api, type DownloadHistoryItem } from '../services/api';
 import { UserProfileMenu } from '../components/UserProfileMenu';
 import { EditorSidebar } from '../components/EditorSidebar';
 
+// Library = the user's download history (MongoDB download log). Files themselves live on the user's PC.
 interface CloudVideo {
   id: string;
   fileName: string;
   size: number;
   duration: number;
-  mimeType: string;
+  mimeType: string;   // shown as the "type" label: platform · quality · status
   thumbnail?: string;
-  driveFileId: string;
+  url: string;
   createdAt: string;
+}
+
+function toLibraryItem(d: DownloadHistoryItem): CloudVideo {
+  return {
+    id: d.jobId,
+    fileName: d.title || d.url,
+    size: d.sizeBytes || 0,
+    duration: d.durationSec || 0,
+    mimeType: [d.platform, d.quality, d.status !== 'completed' ? d.status : ''].filter(Boolean).join(' · '),
+    url: d.url,
+    createdAt: d.createdAt,
+  };
 }
 
 export default function CloudStoragePage() {
@@ -33,7 +45,6 @@ export default function CloudStoragePage() {
     isAuthenticated,
     isLoading: authLoading,
     isPro,
-    selectPlan,
   } = useAuth();
 
   const [videos, setVideos] = useState<CloudVideo[]>([]);
@@ -78,12 +89,13 @@ export default function CloudStoragePage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.cloudStorage.getVideos();
+      const res = await api.downloads.history(100);
       const data = await res.json();
-      if (res.ok && data.videos) {
-        setVideos(data.videos);
+      console.log('[ClipFlow library] history:', data);
+      if (res.ok && Array.isArray(data.items)) {
+        setVideos(data.items.map(toLibraryItem));
       } else {
-        setError(data.error || 'Failed to load videos');
+        setError(data.error || 'Failed to load your downloads');
       }
     } catch (err: any) {
       setError(err.message || 'Error fetching cloud videos');
@@ -111,10 +123,10 @@ export default function CloudStoragePage() {
     setDeletingId(videoId);
     setError(null);
     try {
-      const res = await api.cloudStorage.deleteVideo(videoId);
+      const res = await api.downloads.remove(videoId);
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to delete video');
       }
 
@@ -128,37 +140,13 @@ export default function CloudStoragePage() {
     }
   };
 
-  const handleDownload = async (videoId: string, fileName?: string) => {
-    const downloadUrl = api.cloudStorage.getVideoDownloadUrl(videoId);
-    try {
-      const res = await api.cloudStorage.downloadVideoBlob(videoId);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = fileName || 'clipflow_video.mp4';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        if (document.body.contains(a)) document.body.removeChild(a);
-        window.URL.revokeObjectURL(blobUrl);
-      }, 3000);
-    } catch (err) {
-      window.open(downloadUrl, '_blank');
-    }
+  // Files aren't stored by ClipFlow — "download" reopens the link in the editor to export it again.
+  const handleDownload = async (videoId: string, _fileName?: string) => {
+    const item = videos.find((v) => v.id === videoId);
+    if (item) navigate(`/editor/studio?url=${encodeURIComponent(item.url)}`);
   };
 
-  const handleUpgradeToPro = async () => {
-    const res = await selectPlan('pro');
-    if (res.success) {
-      setSuccessMsg('Upgraded to PRO plan! Cloud Storage is now active.');
-      fetchVideos();
-    } else {
-      setError(res.error || 'Upgrade failed');
-    }
-  };
+
 
   if (authLoading) {
     return (
@@ -183,7 +171,7 @@ export default function CloudStoragePage() {
         <header className="h-[52px] flex items-center justify-between px-6 border-b border-zinc-800/80 bg-black/90 backdrop-blur-md shrink-0 sticky top-0 z-20">
           <div className="flex items-center gap-2.5">
             <Cloud className="w-4 h-4 text-zinc-400" />
-            <h1 className="text-sm font-semibold text-zinc-100 tracking-tight">Cloud Storage</h1>
+            <h1 className="text-sm font-semibold text-zinc-100 tracking-tight">My Downloads</h1>
           </div>
 
           <div className="flex items-center gap-3">
@@ -228,36 +216,13 @@ export default function CloudStoragePage() {
             )}
           </AnimatePresence>
 
-          {/* Free Tier Upgrade Banner - Minimalist Pro Banner */}
-          {!isPro && (
-            <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col md:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3.5">
-                <div className="p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300">
-                  <Crown className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-semibold text-zinc-200">Upgrade to Pro for Cloud Storage</h3>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Unlock 50 GB high-speed cloud backup and automated cloud clip history.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={handleUpgradeToPro}
-                className="px-4 py-2 rounded-lg bg-zinc-100 hover:bg-white text-black font-semibold text-xs transition-colors shrink-0"
-              >
-                Upgrade to PRO
-              </button>
-            </div>
-          )}
-
           {/* Table Section */}
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
               <div className="flex items-center gap-2">
                 <HardDrive className="w-3.5 h-3.5 text-zinc-400" />
                 <span className="text-xs font-medium text-zinc-400">
-                  Files ({videos.length})
+                  Downloads ({videos.length})
                 </span>
               </div>
             </div>

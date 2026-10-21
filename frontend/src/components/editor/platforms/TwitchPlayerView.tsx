@@ -1,7 +1,27 @@
 import { useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import type { TwitchPlayerProps } from './types';
-import { api } from '../../../services/api';
+import { extensionBridge } from '../../../services/extensionBridge';
+
+/**
+ * Live playlists (when a channel has no DVR recording) carry Twitch's stitched ads: content segments are
+ * titled "live", ads are not. Drop the ad segments so the preview shows the stream. If a playlist is all
+ * ads (pre-roll), keep it unchanged — hls.js would stall on an empty playlist.
+ */
+function stripTwitchAds(m3u8: string): string {
+  if (!m3u8.includes('#EXTINF') || !m3u8.includes(',live')) return m3u8;
+  const out: string[] = [];
+  const lines = m3u8.split(/\r?\n/);
+  let removed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('#EXTINF') && !/,live/.test(line)) { i++; removed++; continue; }   // skip ad + its URI line
+    if (line.startsWith('#EXT-X-DATERANGE') && line.includes('stitched-ad')) continue;
+    out.push(line);
+  }
+  if (removed) console.log(`[Twitch preview] removed ${removed} ad segments`);
+  return out.join(String.fromCharCode(10));
+}
 
 export function TwitchPlayerView({
   videoElementRef,
@@ -40,23 +60,49 @@ export function TwitchPlayerView({
         hlsRef.current = null;
       }
 
+      // Every playlist / segment request goes through the ClipFlow extension (user's own IP, no CORS,
+      // no server proxy). Results are handed back to hls.js in its loader-callback format.
       const DefaultLoader = Hls.DefaultConfig.loader;
-      class ProxyHlsLoader extends DefaultLoader {
-        override load(context: any, config: any, callbacks: any) {
-          if (context && context.url && typeof context.url === 'string') {
-            const rawUrl = context.url;
-            if (
-              (rawUrl.includes('cloudfront.net') || rawUrl.includes('ttvnw.net')) &&
-              !api.video.isProxiedUrl(rawUrl)
-            ) {
-              if (rawUrl.includes('.m3u8')) {
-                context.url = api.video.getHlsProxyUrl(rawUrl);
-              } else {
-                context.url = api.video.getProxyStreamUrl(rawUrl);
+      class ExtensionHlsLoader extends DefaultLoader {
+        private ctrl: AbortController | null = null;
+
+        override load(context: any, _config: any, callbacks: any) {
+          const stats = (this as any).stats;
+          const ctrl = new AbortController();
+          this.ctrl = ctrl;
+          stats.loading.start = performance.now();
+          const range = typeof context.rangeEnd === 'number' && context.rangeEnd > 0
+            ? `bytes=${context.rangeStart ?? 0}-${context.rangeEnd - 1}` : undefined;
+
+          extensionBridge.fetchMedia(context.url, { range, signal: ctrl.signal })
+            .then(async (res) => {
+              if (ctrl.signal.aborted) return;
+              if (!res.ok) {
+                console.warn('[Twitch preview] HLS request failed', res.status, context.url.split('?')[0]);
+                callbacks.onError({ code: res.status, text: `HTTP ${res.status}` }, context, null, stats);
+                return;
               }
-            }
-          }
-          super.load(context, config, callbacks);
+              let data: string | ArrayBuffer = context.responseType === 'arraybuffer' ? await res.arrayBuffer() : await res.text();
+              if (typeof data === 'string') data = stripTwitchAds(data);
+              const size = typeof data === 'string' ? data.length : data.byteLength;
+              stats.loading.first = stats.loading.end = performance.now();
+              stats.loaded = stats.total = size;
+              callbacks.onSuccess({ url: context.url, data, code: res.status }, stats, context, null);
+            })
+            .catch((err: any) => {
+              if (ctrl.signal.aborted) return;
+              console.warn('[Twitch preview] HLS request error', err?.message, context.url.split('?')[0]);
+              callbacks.onError({ code: 0, text: err?.message || 'Extension fetch failed' }, context, null, stats);
+            });
+        }
+
+        override abort() {
+          this.ctrl?.abort();
+          (this as any).stats.aborted = true;
+        }
+
+        override destroy() {
+          this.ctrl?.abort();
         }
       }
 
@@ -71,7 +117,7 @@ export function TwitchPlayerView({
         liveSyncDurationCount: 0,
         liveMaxLatencyDurationCount: Infinity,
         liveDurationInfinity: false,
-        loader: ProxyHlsLoader as any,
+        loader: ExtensionHlsLoader as any,
       });
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {

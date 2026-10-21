@@ -55,124 +55,11 @@ function appendToLogFile(level: string, context: string, message: string, meta?:
   }
 }
 
-/**
- * Maps known YouTube itag values to human-readable format names
- */
-const ITAG_MAP: Record<string, string> = {
-  '140': 'Audio AAC (128kbps)',
-  '251': 'Audio Opus (160kbps)',
-  '250': 'Audio Opus (70kbps)',
-  '249': 'Audio Opus (50kbps)',
-  '137': 'Video 1080p MP4',
-  '136': 'Video 720p MP4',
-  '135': 'Video 480p MP4',
-  '134': 'Video 360p MP4',
-  '133': 'Video 240p MP4',
-  '160': 'Video 144p MP4',
-  '248': 'Video 1080p WebM',
-  '247': 'Video 720p WebM',
-  '244': 'Video 480p WebM',
-  '243': 'Video 360p WebM',
-  '271': 'Video 1440p (2K) WebM',
-  '313': 'Video 2160p (4K) WebM',
-  '399': 'Video 1080p AV1',
-  '398': 'Video 720p AV1',
-  '18': 'Video+Audio 360p MP4',
-  '22': 'Video+Audio 720p MP4',
-};
-
-/**
- * Summarizes long streaming/proxy query URLs into concise, readable human words.
- */
+/** Short form of a request URL for the console: path only, long query strings trimmed. */
 export function summarizeRequestUrl(url: string): string {
-  if (!url) return '';
-
-  // 1. YouTube / GoogleVideo Proxy Streaming URLs
-  if (url.includes('/proxy-stream?url=') || url.includes('/stream-range?url=')) {
-    const route = url.includes('/proxy-stream') ? '/api/video/proxy-stream' : '/api/video/stream-range';
-    const queryPart = url.split(/\/(?:proxy-stream|stream-range)\?url=/)[1];
-    
-    if (queryPart) {
-      let decodedUrl = '';
-      try {
-        decodedUrl = decodeURIComponent(queryPart);
-      } catch {
-        decodedUrl = queryPart;
-      }
-
-      // Parse details from GoogleVideo URL
-      if (decodedUrl.includes('googlevideo.com') || decodedUrl.includes('youtube.com')) {
-        const itagMatch = decodedUrl.match(/[?&]itag=(\d+)/);
-        const clenMatch = decodedUrl.match(/[?&]clen=(\d+)/);
-        const durMatch = decodedUrl.match(/[?&]dur=([\d.]+)/);
-        const mimeMatch = decodedUrl.match(/[?&]mime=([^&]+)/);
-
-        const itag = itagMatch ? itagMatch[1] : null;
-        const itagLabel = itag ? ITAG_MAP[itag] || `itag ${itag}` : 'Media Stream';
-        
-        let sizeLabel = '';
-        if (clenMatch) {
-          const bytes = parseInt(clenMatch[1], 10);
-          if (!isNaN(bytes)) {
-            const mb = (bytes / (1024 * 1024)).toFixed(2);
-            sizeLabel = `, ${mb}MB`;
-          }
-        }
-
-        let durLabel = '';
-        if (durMatch) {
-          const durSec = parseFloat(durMatch[1]);
-          if (!isNaN(durSec)) {
-            const m = Math.floor(durSec / 60);
-            const s = Math.floor(durSec % 60);
-            durLabel = `, ${m}m ${s}s`;
-          }
-        }
-
-        const isAudio = mimeMatch ? decodeURIComponent(mimeMatch[1]).includes('audio') : (itag === '140' || itag === '251' || itag === '250' || itag === '249');
-        const trackType = isAudio ? '🎵 YouTube Audio' : '🎬 YouTube Video';
-
-        return `${route} → ${trackType} [${itagLabel}${sizeLabel}${durLabel}]`;
-      }
-
-      // Twitch streams
-      if (decodedUrl.includes('twitch.tv') || decodedUrl.includes('ttvnw.net') || decodedUrl.includes('cloudfront.net')) {
-        return `${route} → 🎮 Twitch Stream Chunk`;
-      }
-
-      // Instagram streams
-      if (decodedUrl.includes('instagram.com') || decodedUrl.includes('cdninstagram.com')) {
-        return `${route} → 📸 Instagram Video Stream`;
-      }
-
-      // Twitter / X streams
-      if (decodedUrl.includes('twimg.com') || decodedUrl.includes('twitter.com') || decodedUrl.includes('x.com')) {
-        return `${route} → 🐦 Twitter/X Video Stream`;
-      }
-
-      return `${route} → Direct Stream Relay`;
-    }
-  }
-
-  // 2. HLS Proxy URLs
-  if (url.includes('/hls-proxy?url=')) {
-    return `/api/video/hls-proxy → HLS Master Playlist`;
-  }
-
-  // 3. Frame extraction URLs
-  if (url.startsWith('/api/video/frame?') || url.startsWith('/frame?')) {
-    const timeMatch = url.match(/[?&]time=([\d.]+)/);
-    const timeStr = timeMatch ? ` at ${timeMatch[1]}s` : '';
-    return `/api/video/frame → Extract Frame${timeStr}`;
-  }
-
-  // 4. Default clean URL without giant query strings
-  if (url.length > 120) {
-    const [pathname] = url.split('?');
-    return `${pathname} (with query parameters)`;
-  }
-
-  return url;
+  const [path, query] = url.split('?');
+  if (!query) return path;
+  return query.length > 60 ? `${path}?${query.slice(0, 60)}…` : `${path}?${query}`;
 }
 
 /**
@@ -262,13 +149,10 @@ export const logger = {
    * Log an incoming HTTP request.
    * Summarizes big streaming URLs in console while writing full raw URLs to app.log.
    */
-  http(method: string, rawUrl: string, status?: number) {
-    // 1. Write complete raw URL to log file
-    appendToLogFile('HTTP', 'Server', `${method} ${rawUrl}${status ? ` → Status ${status}` : ''}`);
-
-    // 2. Print clean, summarized words to terminal console
-    const cleanUrl = summarizeRequestUrl(rawUrl);
-    nativeConsoleLog(`[HTTP] ${method} ${cleanUrl}${status ? ` [${status}]` : ''}`);
+  http(method: string, rawUrl: string, status?: number, ms?: number, userId?: string) {
+    const tail = `${status ? ` [${status}]` : ''}${ms !== undefined ? ` ${ms}ms` : ''}${userId ? ` user=${userId}` : ''}`;
+    appendToLogFile('HTTP', 'Server', `${method} ${rawUrl}${tail}`);
+    nativeConsoleLog(`[HTTP] ${method} ${summarizeRequestUrl(rawUrl)}${tail}`);
   },
 
   /**

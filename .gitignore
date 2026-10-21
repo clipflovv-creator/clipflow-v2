@@ -97,6 +97,7 @@ backend/public/downloads/*
 # --- Binaries, Toolchains, & Installers ---
 *.exe
 *.zip
+!frontend/public/extension/clipflow-extension.zip
 *.tar.gz
 *.dmg
 inno_setup.exe

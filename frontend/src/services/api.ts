@@ -138,145 +138,52 @@ export const googleApi = {
   },
 };
 
-// ── Video & Media APIs ──────────────────────────────────────────────────────
-export interface VideoDownloadPayload {
-  url: string;
-  format?: string;
-  quality?: string;
-  audioBitrate?: string;
-  trimStart?: number;
-  trimEnd?: number;
-  aspectRatio?: string;
-  fitMode?: string;
-  cropPosition?: string;
-  cropBox?: { x: number; y: number; width: number; height: number };
-  customFileName?: string;
-  mode?: string;
-  captionLang?: string;
-  subtitleLang?: string;
-  relativeTimecodes?: boolean;
+// ── Video metadata (via the ClipFlow extension, from the user's own IP) ──────
+// The server does no video work; without the extension there is nothing to resolve links with.
+export const videoApi = {
+  async getMetadata(url: string, _signal?: AbortSignal) {
+    const { extensionBridge } = await import('./extensionBridge');
+    if (!(await extensionBridge.detect())) {
+      return jsonResponse({ error: 'Install the ClipFlow browser extension to open videos.' }, 412);
+    }
+    try {
+      const meta = await extensionBridge.getEditorMetadata(url);
+      if (!meta) return jsonResponse({ error: 'This link is not supported by your ClipFlow extension.' }, 422);
+      return jsonResponse(meta, 200);
+    } catch (err: any) {
+      console.error('[api] extension metadata failed:', err);
+      return jsonResponse({ error: err?.message || 'Could not read this video' }, 502);
+    }
+  },
+};
+
+function jsonResponse(body: unknown, status: number) {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-export const videoApi = {
-  async getMetadata(url: string, signal?: AbortSignal) {
-    return fetch(`${BACKEND_URL}/api/video/metadata`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-      signal,
-    });
+// ── Download history (the user's library; logged by the extension bridge) ───
+export interface DownloadHistoryItem {
+  jobId: string;
+  platform: 'youtube' | 'instagram' | 'twitter' | 'twitch';
+  kind?: string;
+  url: string;
+  title?: string;
+  quality?: string;
+  sizeBytes?: number;
+  durationSec?: number;
+  status: 'started' | 'completed' | 'failed' | 'cancelled';
+  error?: string;
+  createdAt: string;
+}
+
+export const downloadsApi = {
+  async history(limit = 50, before?: string) {
+    const q = new URLSearchParams({ limit: String(limit), ...(before ? { before } : {}) });
+    return fetch(`${BACKEND_URL}/api/downloads/history?${q}`, { credentials: 'include' });
   },
 
-  async download(payload: VideoDownloadPayload) {
-    return fetch(`${BACKEND_URL}/api/video/download`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  },
-
-  async fetchFile(downloadUrl: string) {
-    const fullUrl = downloadUrl.startsWith('http') ? downloadUrl : `${BACKEND_URL}${downloadUrl}`;
-    return fetch(fullUrl);
-  },
-
-  getProxyStreamUrl(directUrl: string): string {
-    if (!directUrl) return '';
-    return `${BACKEND_URL}/api/video/proxy-stream?url=${encodeURIComponent(directUrl)}`;
-  },
-
-  getHlsProxyUrl(rawUrl: string): string {
-    if (!rawUrl) return '';
-    return `${BACKEND_URL}/api/video/hls-proxy?url=${encodeURIComponent(rawUrl)}`;
-  },
-
-  isProxiedUrl(url: string): boolean {
-    if (!url) return false;
-    return url.includes('/api/video/') || url.includes('/api/twitch-live/');
-  },
-
-  getFrameUrl(params: {
-    url: string;
-    time: number;
-    quality: string;
-    cleanTitle: string;
-    cropParam?: string;
-    streamParam?: string;
-  }): string {
-    const crop = params.cropParam || '';
-    const stream = params.streamParam || '';
-    return `${BACKEND_URL}/api/video/frame?url=${encodeURIComponent(params.url)}&time=${params.time}&quality=${encodeURIComponent(params.quality)}&download=true&fullRes=true&format=png&title=${encodeURIComponent(params.cleanTitle)}${crop}${stream}`;
-  },
-};
-
-// ── Twitch Live & Preview APIs ──────────────────────────────────────────────
-export const twitchApi = {
-  async getStreamInfo(url: string, options?: { quality?: string; forceRefresh?: boolean; signal?: AbortSignal }) {
-    const qualityParam = options?.quality ? `&quality=${encodeURIComponent(options.quality)}` : '';
-    const refreshParam = options?.forceRefresh ? '&forceRefresh=true' : '';
-    const endpoint = `${BACKEND_URL}/api/twitch-live/stream-info?url=${encodeURIComponent(url)}${qualityParam}${refreshParam}`;
-    return fetch(endpoint, { signal: options?.signal });
-  },
-
-  getLiveFrameUrl(params: {
-    url: string;
-    chunkOffset: number;
-    localTime: number;
-    targetTime: number;
-    quality: string;
-    cleanTitle: string;
-    cropParam?: string;
-  }): string {
-    const crop = params.cropParam || '';
-    return `${BACKEND_URL}/api/twitch-live/live-frame?url=${encodeURIComponent(params.url)}&chunkOffset=${params.chunkOffset}&localTime=${params.localTime}&globalTime=${params.targetTime}&quality=${encodeURIComponent(params.quality)}&download=true&format=png&title=${encodeURIComponent(params.cleanTitle)}${crop}`;
-  },
-};
-
-// ── Cloud Storage (Self-hosted & Supabase) ──────────────────────────────────
-export const cloudStorageApi = {
-  async getVideos() {
-    return fetch(`${BACKEND_URL}/api/videos`, {
-      credentials: 'include',
-    });
-  },
-
-  async deleteVideo(videoId: string) {
-    return fetch(`${BACKEND_URL}/api/videos/${videoId}`, {
-      method: 'DELETE',
-      credentials: 'include',
-    });
-  },
-
-  getVideoDownloadUrl(videoId: string): string {
-    return `${BACKEND_URL}/api/videos/${videoId}/download`;
-  },
-
-  async downloadVideoBlob(videoId: string) {
-    return fetch(`${BACKEND_URL}/api/videos/${videoId}/download`, {
-      credentials: 'include',
-    });
-  },
-};
-
-// ── Google Drive Storage ────────────────────────────────────────────────────
-export const driveApi = {
-  async getFiles(token: string) {
-    return fetch(`${BACKEND_URL}/api/drive/files`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  },
-
-  async getQuota(token: string) {
-    return fetch(`${BACKEND_URL}/api/drive/quota`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  },
-
-  async deleteFile(fileId: string, token: string) {
-    return fetch(`${BACKEND_URL}/api/drive/files/${fileId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    });
+  async remove(jobId: string) {
+    return fetch(`${BACKEND_URL}/api/downloads/${encodeURIComponent(jobId)}`, { method: 'DELETE', credentials: 'include' });
   },
 };
 
@@ -291,45 +198,13 @@ export const appRequestsApi = {
   },
 };
 
-// ── ytdlp.online Direct Stream API ──────────────────────────────────────────
-export const ytdlpOnlineApi = {
-  async testResolve(url: string) {
-    return fetch(`${BACKEND_URL}/api/video/ytdlp-online/test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-  },
-
-  async getSessions() {
-    return fetch(`${BACKEND_URL}/api/video/ytdlp-online/sessions`);
-  },
-
-  async addSession(sid: string, session: string) {
-    return fetch(`${BACKEND_URL}/api/video/ytdlp-online/session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sid, session }),
-    });
-  },
-
-  async clearSessions() {
-    return fetch(`${BACKEND_URL}/api/video/ytdlp-online/sessions`, {
-      method: 'DELETE',
-    });
-  },
-};
-
 // ── Unified API Export ──────────────────────────────────────────────────────
 export const api = {
   auth: authApi,
   google: googleApi,
   video: videoApi,
-  twitch: twitchApi,
-  cloudStorage: cloudStorageApi,
-  drive: driveApi,
+  downloads: downloadsApi,
   appRequests: appRequestsApi,
-  ytdlpOnline: ytdlpOnlineApi,
 };
 
 export default api;

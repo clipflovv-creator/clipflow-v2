@@ -11,7 +11,6 @@ import { EditorSidebar } from '../components/EditorSidebar';
 import { type CropBox } from '../components/CropFrameOverlay';
 import { useTwitchPreview } from '../components/Twitch/useTwitchPreview';
 import { isTwitchLiveChannelUrl } from '../components/Twitch/useTwitchLiveChannel';
-import { exportTwitchClipInBrowser } from '../services/browserTwitchExporter';
 import { saveTwitchSession, getTwitchSession } from '../utils/twitchChunkStorage';
 import {
   getEditorSession,
@@ -21,7 +20,9 @@ import {
   setStoredProcessingMode,
 } from '../utils/editorSession';
 import { detectPlatform, extractYouTubeId } from '../utils/platforms';
-import { ClientVideoExportEngine } from '../services/clientVideoExportEngine';
+import { extensionBridge, platformOf, type DownloadEvent } from '../services/extensionBridge';
+import ExtensionInstallPrompt from '../components/editor/ExtensionInstallPrompt';
+import { buildVideoFilter } from '../services/videoFilters';
 
 // Modular Editor Components
 import {
@@ -41,8 +42,8 @@ import {
 import { useEditorMetadata } from '../hooks/editor/useEditorMetadata';
 import { useEditorPlayback } from '../hooks/editor/useEditorPlayback';
 
-import { resolveRelayUrl, getAudioTrackScore } from '../services/clientMediaRangeFetcher.js';
-import { api } from '../services/api';
+import { getAudioTrackScore } from '../services/audioTracks';
+import { formatCaptions, trimCues, type CaptionFormat } from '../services/captions';
 
 function formatTime(seconds: number, includeDecimals: boolean = false): string {
   if (isNaN(seconds) || seconds < 0) return '00:00';
@@ -169,6 +170,10 @@ export default function ClipFlowEditor() {
 
   const [isTrimEnabled, setIsTrimEnabled] = useState<boolean>(true);
   const [trimRange, setTrimRange] = useState<[number, number]>(() => {
+    // Shareable clip links: /editor/studio?url=...&start=3600&end=3610 (seconds)
+    const qsStart = Number(searchParams.get('start'));
+    const qsEnd = Number(searchParams.get('end'));
+    if (searchParams.has('start') && searchParams.has('end') && qsStart >= 0 && qsEnd > qsStart) return [qsStart, qsEnd];
     if (rawUrl && isTwitchLiveChannelUrl(rawUrl)) return [0, 60];
     if (initialTwitchSession && initialTwitchSession.trimRange) return initialTwitchSession.trimRange;
     return initialSession?.trimRange || [0, 60];
@@ -248,6 +253,7 @@ export default function ClipFlowEditor() {
     if (dur > 0) {
       setActualDuration((prev) => (dur > prev || prev === 0 ? Math.round(dur) : prev));
       setTrimRange((prev) => {
+        if (searchParams.has('start') && searchParams.has('end')) return prev; // range came from the link
         if (prev[0] === 0 && (prev[1] === 60 || prev[1] === 0 || prev[1] < dur)) {
           return [0, Math.round(dur)];
         }
@@ -288,6 +294,8 @@ export default function ClipFlowEditor() {
 
   // Download & Status
   const [isDownloading, setIsDownloading] = useState(false);
+  // What to resume once the extension is installed (download / captions / frame).
+  const [extensionPromptAction, setExtensionPromptAction] = useState<null | (() => void)>(null);
   const [downloadStatus, setDownloadStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
@@ -414,11 +422,8 @@ export default function ClipFlowEditor() {
 
   const activeVideoSrc = useMemo(() => {
     if (isTwitch) return selectedPreviewQualityUrl || twitchHlsUrl;
-    if (!rawPreviewSrc) return '';
-    if (isTwitter || isInstagram || useProxyFallback || rawPreviewSrc.includes('twimg.com') || rawPreviewSrc.includes('cdninstagram.com') || rawPreviewSrc.includes('instagram.com')) {
-      return resolveRelayUrl(rawPreviewSrc);
-    }
-    return rawPreviewSrc;
+    // Stream URLs are resolved by the extension from this browser's IP, so they play directly.
+    return rawPreviewSrc || '';
   }, [rawPreviewSrc, isTwitter, isInstagram, useProxyFallback, isTwitch, twitchHlsUrl, selectedPreviewQualityUrl]);
 
   const activeVideoHasAudio = useMemo(() => {
@@ -448,11 +453,7 @@ export default function ClipFlowEditor() {
 
     if (!audioTrack?.url) return null;
 
-    let audioUrl = audioTrack.url;
-    if (isTwitter || isInstagram || audioUrl.includes('twimg.com') || audioUrl.includes('cdninstagram.com') || audioUrl.includes('instagram.com') || useProxyFallback) {
-      return api.video.getProxyStreamUrl(audioUrl);
-    }
-    return audioUrl;
+    return audioTrack.url;
   }, [metadata, activeVideoHasAudio, youtubeId, isInstagram, isTwitter, useProxyFallback]);
 
 
@@ -692,14 +693,6 @@ export default function ClipFlowEditor() {
           if (res.ok) blob = await res.blob();
         } catch {}
 
-        if (!blob) {
-          try {
-            const proxyUrl = api.video.getProxyStreamUrl(thumbUrl);
-            const res = await fetch(proxyUrl);
-            if (res.ok) blob = await res.blob();
-          } catch {}
-        }
-
         if (blob) {
           const bitmap = await createImageBitmap(blob);
           const canvas = document.createElement('canvas');
@@ -722,10 +715,7 @@ export default function ClipFlowEditor() {
         img.crossOrigin = 'anonymous';
         await new Promise((resolve, reject) => {
           img.onload = resolve;
-          img.onerror = () => {
-            img.onerror = reject;
-            img.src = resolveRelayUrl(thumbUrl);
-          };
+          img.onerror = reject;
           img.src = thumbUrl;
         });
         const canvas = document.createElement('canvas');
@@ -777,44 +767,28 @@ export default function ClipFlowEditor() {
           }
         }
 
-        // 2. High-resolution server-side frame extraction (YouTube or direct stream)
-        const cropParam = isCropped
-          ? `&crop_x=${cropBox.x}&crop_y=${cropBox.y}&crop_w=${cropBox.width}&crop_h=${cropBox.height}`
-          : '';
-
-        let backendUrl: string;
-        if (isLiveChannelUrl) {
-          const chunkOffset = Math.floor(targetTime / 5) * 5;
-          const localTime = +(targetTime - chunkOffset).toFixed(3);
-          backendUrl = api.twitch.getLiveFrameUrl({
-            url: activeUrl,
-            chunkOffset,
-            localTime,
-            targetTime,
-            quality: downloadQuality,
-            cleanTitle,
-            cropParam,
-          });
-        } else {
-          const streamParam = rawPreviewSrc ? `&streamUrl=${encodeURIComponent(rawPreviewSrc)}` : '';
-          backendUrl = api.video.getFrameUrl({
-            url: activeUrl,
-            time: targetTime,
-            quality: downloadQuality,
-            cleanTitle,
-            cropParam,
-            streamParam,
-          });
+        // 2. Full-resolution frame via the extension (ffmpeg.wasm), saved into Downloads.
+        //    Used for YouTube (embedded player can't be captured) and when the canvas capture fails.
+        const videoFilter = isCropped
+          ? buildVideoFilter(aspectRatio, fitMode, cropPosition, cropBox ?? undefined) ?? undefined
+          : undefined;
+        if (!(await extensionBridge.detect())) {
+          setExtensionPromptAction(() => () => void handleDownloadImage());
+          throw new Error('ClipFlow extension not installed');
         }
-
-        const res = await fetch(backendUrl);
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `Server failed to capture frame (HTTP ${res.status})`);
-        }
-        const blob = await res.blob();
-        const pngBlob = blob.type === 'image/png' ? blob : new Blob([blob], { type: 'image/png' });
-        triggerNativeDownload(pngBlob, fileName);
+        console.log('[ClipFlow editor] frame capture via extension', { time: targetTime, videoFilter });
+        await new Promise<void>((resolve, reject) => {
+          extensionBridge.download(activeUrl, {
+            output: 'png',
+            startSec: targetTime,
+            videoFilter,
+            maxHeight: parseInt(String(downloadQuality || ''), 10) || undefined,
+            filename: fileName.replace(/\.png$/, ''),
+          }, (e) => {
+            if (e.event === 'done') resolve();
+            else if (e.event === 'error') reject(new Error(e.message));
+          });
+        });
         setDownloadSuccess(true);
         setTimeout(() => setDownloadSuccess(false), 2000);
       }
@@ -858,27 +832,21 @@ export default function ClipFlowEditor() {
       if (downloadFormat === 'captions') {
         setDownloadProgress(20);
         setStatusMessage(`Processing ${captionFormat.toUpperCase()} subtitles...`);
-        const res = await api.video.download({
-          url: activeUrl,
-          format: captionFormat,
-          captionLang: captionLang || 'auto',
-          trimStart: effectiveTrimStart,
-          trimEnd: effectiveTrimEnd,
-          customFileName: customFileName || metadata?.title || 'Subtitles',
-          relativeTimecodes: true,
-          mode: 'server',
-        });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || 'Failed to fetch subtitles for this video');
+        if (!(await extensionBridge.detect())) {
+          setExtensionPromptAction(() => () => void handleExportDownload());
+          throw new Error('Install the ClipFlow extension to export captions.');
         }
-
+        const lang = captionLang && captionLang !== 'auto' ? captionLang : undefined;
+        console.log('[ClipFlow editor] captions via extension', { lang, format: captionFormat, trim: [effectiveTrimStart, effectiveTrimEnd] });
+        const caps = await extensionBridge.getCaptions(activeUrl, lang);
         setDownloadProgress(75);
-        const data = await res.json();
-        const fileRes = await api.video.fetchFile(data.downloadUrl);
-        if (!fileRes.ok) throw new Error('Failed to retrieve generated subtitle file from server');
-        const blob = await fileRes.blob();
+        const cues = trimCues(caps.cues, effectiveTrimStart, effectiveTrimEnd, true);
+        if (!cues.length) throw new Error('No captions in the selected range');
+        const blob = new Blob([formatCaptions(cues, captionFormat as CaptionFormat)], { type: 'text/plain;charset=utf-8' });
+        const data = {
+          fileName: `${customFileName || metadata?.title || 'Subtitles'}.${captionFormat}`,
+          message: `Subtitles (${caps.lang}, ${captionFormat.toUpperCase()}) downloaded.`,
+        };
 
         const blobUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -913,262 +881,88 @@ export default function ClipFlowEditor() {
         return;
       }
 
-      // 1. Twitch Browser-Side Export Pipeline (with Quality Selection & Server Fallback)
-      if (isTwitch && twitchHlsUrl) {
-        setDownloadProgress(5);
-        setStatusMessage('Preparing video...');
+      // ── Everything else goes to the ClipFlow extension ──────────────────────────────
+      // The extension resolves the stream from this browser's IP. If nothing needs changing it downloads
+      // the file directly; otherwise it fetches only what the clip needs and runs ffmpeg.wasm (trim, crop,
+      // join, audio) before saving into Downloads. No server processing, nothing to install but the extension.
+      const platform = platformOf(activeUrl);
+      console.log('[ClipFlow editor] Download clicked', { url: activeUrl, platform, format: effectiveFormat, quality: downloadQuality, trim: isTrimEnabled ? [effectiveTrimStart, effectiveTrimEnd] : 'full', aspectRatio, fitMode, cropBox });
 
-        // Find exact variant URL matching downloadQuality (or audio_only for audio exports)
-        let targetManifest = twitchHlsUrl;
-        const isAudioExport = effectiveFormat === 'mp3' || (effectiveFormat as string) === 'wav' || (effectiveFormat as string) === 'aac';
-        if (isAudioExport) {
-          const audioTier = twitchQualities.find((q) => q.id === 'audio_only');
-          if (audioTier) {
-            targetManifest = audioTier.proxiedUrl || audioTier.url;
-          }
-        } else if (downloadQuality) {
-          const cleanQ = downloadQuality.toLowerCase().replace(/[^\d]/g, '');
-          const matchTier = twitchQualities.find((q) => q.id === downloadQuality || (cleanQ && q.height === Number(cleanQ)));
-          if (matchTier) {
-            targetManifest = matchTier.proxiedUrl || matchTier.url;
-          }
-        }
-
-        try {
-          await exportTwitchClipInBrowser({
-            manifestUrl: targetManifest,
-            trimStart: effectiveTrimStart,
-            trimEnd: effectiveTrimEnd,
-            customFileName: customFileName || metadata?.title || 'Twitch_Clip',
-            format: effectiveFormat,
-            quality: downloadQuality,
-            aspectRatio: (aspectRatio === '16:9' && !cropBox) ? undefined : aspectRatio,
-            fitMode: fitMode,
-            cropPosition: cropPosition,
-            cropBox: (aspectRatio === 'custom' || fitMode === 'crop') ? cropBox : undefined,
-            audioBitrate: downloadAudioBitrate,
-            onProgress: (msg, pct) => {
-              setStatusMessage(msg);
-              if (typeof pct === 'number') {
-                setDownloadProgress(Math.min(100, Math.max(0, Math.round(pct))));
-              }
-            },
-          });
-        } catch (browserTwitchErr: any) {
-          console.warn('[Twitch Export] In-browser export failed, falling back to server export engine:', browserTwitchErr);
-          setDownloadProgress(45);
-          setStatusMessage('Processing video in cloud...');
-
-          const res = await api.video.download({
-            url: activeUrl,
-            format: effectiveFormat,
-            quality: downloadQuality,
-            audioBitrate: downloadAudioBitrate,
-            trimStart: effectiveTrimStart,
-            trimEnd: effectiveTrimEnd,
-            aspectRatio: (aspectRatio === '16:9' && !cropBox) ? undefined : aspectRatio,
-            fitMode,
-            cropPosition,
-            cropBox: (aspectRatio === 'custom' || fitMode === 'crop') ? cropBox : undefined,
-            customFileName: customFileName || metadata?.title || 'Twitch_Clip',
-            mode: 'server',
-          });
-
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.error || `Server export failed (${res.status})`);
-          }
-
-          setDownloadProgress(85);
-          const data = await res.json();
-          if (data.downloadUrl) {
-            const fileRes = await api.video.fetchFile(data.downloadUrl);
-            if (!fileRes.ok) throw new Error('Failed to retrieve clip from server');
-            const blob = await fileRes.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = data.fileName || `${customFileName || 'twitch_clip'}.${effectiveFormat}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-          }
-        }
-
-        setDownloadStatus('success');
-        setDownloadProgress(100);
-        setStatusMessage('Clip downloaded successfully!');
-        setTimeout(() => {
-          setStatusMessage('');
-          setDownloadStatus('idle');
-          setDownloadProgress(0);
-        }, 2500);
-
-        saveToHistory({
-          title: customFileName || metadata?.title || 'Twitch Clip',
-          url: activeUrl,
-          platform: 'twitch',
-          format: effectiveFormat,
-          quality: downloadQuality,
-          duration: Math.max(1, effectiveTrimEnd - effectiveTrimStart),
-        });
-        return;
+      const ext = await extensionBridge.detect();
+      if (!ext) {
+        console.warn('[ClipFlow editor] extension not installed → showing install prompt');
+        setExtensionPromptAction(() => () => void handleExportDownload());
+        throw new Error('Install the ClipFlow extension to download — your download starts as soon as it is installed.');
       }
+      if (!platform || !extensionBridge.supports(platform)) throw new Error(`This link isn't supported by your ClipFlow extension (${ext.build} build).`);
 
-      // 2. Client-Side FFmpeg In-Browser Export (YouTube, Instagram, Twitter, etc.) with Automatic Cloud Fallback
-      setDownloadProgress(5);
-      setStatusMessage('Preparing clip...');
+      const output = effectiveFormat === 'mp3' ? 'mp3'
+        : (effectiveFormat as string) === 'wav' ? 'wav'
+        : (effectiveFormat as string) === 'm4a' || (effectiveFormat as string) === 'aac' ? 'm4a'
+        : 'mp4';
+      const useCrop = aspectRatio === 'custom' || fitMode === 'crop';
+      const videoFilter = output !== 'mp4' || (aspectRatio === '16:9' && !cropBox) ? null
+        : buildVideoFilter(aspectRatio, fitMode, cropPosition, useCrop ? cropBox ?? undefined : undefined);
+      const isLive = isTwitchLiveChannelUrl(activeUrl);
+      const options = {
+        startSec: isTrimEnabled && !isLive ? effectiveTrimStart : undefined,
+        endSec: isTrimEnabled && !isLive ? effectiveTrimEnd : undefined,
+        maxLiveSec: isLive ? Math.max(5, effectiveTrimEnd - effectiveTrimStart) : undefined,
+        maxHeight: parseInt(String(downloadQuality || ''), 10) || undefined,
+        videoFilter: videoFilter ?? undefined,
+        output: output as 'mp4' | 'mp3' | 'm4a' | 'wav',
+        filename: customFileName || metadata?.title || 'ClipFlow clip',
+      };
+      console.log('[ClipFlow editor] Sending requirements to extension:', options);
 
-      try {
-        const exportResult = await ClientVideoExportEngine.exportClip({
-          metadata: {
-            ...metadata,
-            url: activeUrl,
-            webpage_url: activeUrl,
-          },
-          url: activeUrl,
-          trimStart: effectiveTrimStart,
-          trimEnd: effectiveTrimEnd,
-          format: effectiveFormat,
-          quality: downloadQuality,
-          audioQuality: downloadAudioBitrate,
-          aspectRatio: (aspectRatio === '16:9' && !cropBox) ? undefined : aspectRatio,
-          cropBox: (aspectRatio === 'custom' || fitMode === 'crop') ? cropBox : undefined,
-          fitMode: fitMode,
-          cropPosition: cropPosition,
-          customFileName: customFileName || metadata?.title || 'ClipFlow_Video',
-          onProgress: (phase, pct) => {
-            setStatusMessage(phase);
-            if (typeof pct === 'number') {
-              setDownloadProgress(Math.min(100, Math.max(0, Math.round(pct))));
-            }
-          },
-        });
-
-        setDownloadStatus('success');
-        setDownloadProgress(100);
-        const successMessage = exportResult.qualityNote
-          ? `Downloaded successfully (${exportResult.qualityNote})`
-          : 'Clip downloaded successfully!';
-        setStatusMessage(successMessage);
-
-        setTimeout(() => {
-          setStatusMessage('');
-          setDownloadStatus('idle');
-          setDownloadProgress(0);
-        }, exportResult.qualityNote ? 5000 : 3000);
-
-        saveToHistory({
-          title: customFileName || metadata?.title || 'ClipFlow Video',
-          url: activeUrl,
-          platform: 'youtube',
-          format: effectiveFormat,
-          quality: exportResult.actualQuality || downloadQuality,
-          duration: Math.max(1, effectiveTrimEnd - effectiveTrimStart),
-        });
-        return;
-      } catch (browserExportErr: any) {
-        console.warn('[ClipFlow Editor] In-browser export engine encountered error, falling back to high-speed cloud renderer:', browserExportErr);
-        setDownloadProgress(40);
-        setStatusMessage('Processing video in cloud...');
-
-        try {
-          const res = await api.video.download({
-            url: activeUrl,
-            format: effectiveFormat,
-            quality: downloadQuality,
-            audioBitrate: downloadAudioBitrate,
-            trimStart: effectiveTrimStart,
-            trimEnd: effectiveTrimEnd,
-            aspectRatio: (aspectRatio === '16:9' && !cropBox) ? undefined : aspectRatio,
-            fitMode,
-            cropPosition,
-            cropBox: (aspectRatio === 'custom' || fitMode === 'crop') ? cropBox : undefined,
-            customFileName: customFileName || metadata?.title || 'ClipFlow_Video',
-            mode: 'server',
-          });
-
-          if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.error || `Server export failed (${res.status})`);
+      const stageText: Record<string, string> = {
+        fetching: 'Downloading', processing: 'Processing',
+        recording: 'Recording live stream', saving: 'Saving',
+      };
+      const done = await new Promise<Extract<DownloadEvent, { event: 'done' }>>((resolve, reject) => {
+        extensionBridge.download(activeUrl, options, (e) => {
+          if (e.event === 'started') {
+            setStatusMessage(e.usesFfmpeg ? 'Fetching clip...' : 'Downloading...');
+            setDownloadProgress(5);
+          } else if (e.event === 'progress') {
+            const pct = typeof e.percent === 'number' ? Math.round(e.percent) : undefined;
+            const extra = pct !== undefined ? ` (${pct}%)` : e.seconds !== undefined ? ` (${e.seconds}s)` : '';
+            setStatusMessage(`${stageText[e.stage] || e.stage}${extra}...`);
+            if (pct !== undefined) setDownloadProgress(Math.min(99, Math.max(5, pct)));
+          } else if (e.event === 'done') resolve(e);
+          else if (e.event === 'error') {
+            reject(new Error(e.message));
           }
+        });
+      });
 
-          setDownloadProgress(85);
-          setStatusMessage('Downloading clip...');
-          const data = await res.json();
-          if (data.downloadUrl) {
-            const fileRes = await api.video.fetchFile(data.downloadUrl);
-            if (!fileRes.ok) throw new Error('Failed to retrieve clip from server');
-            const blob = await fileRes.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = data.fileName || `${customFileName || metadata?.title || 'ClipFlow_Clip'}.${effectiveFormat}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-          }
-
-          setDownloadStatus('success');
-          setDownloadProgress(100);
-          setStatusMessage('Clip downloaded successfully!');
-
-          setTimeout(() => {
-            setStatusMessage('');
-            setDownloadStatus('idle');
-            setDownloadProgress(0);
-          }, 3000);
-
-          saveToHistory({
-            title: customFileName || metadata?.title || 'ClipFlow Video',
-            url: activeUrl,
-            platform: isYouTube ? 'youtube' : 'video',
-            format: effectiveFormat,
-            quality: downloadQuality,
-            duration: Math.max(1, effectiveTrimEnd - effectiveTrimStart),
-          });
-          return;
-        } catch (serverFallbackErr: any) {
-          console.error('[ClipFlow Editor] Both browser and cloud export failed:', serverFallbackErr);
-          const errMsg = serverFallbackErr?.message || browserExportErr?.message || 'Export failed';
-          setDownloadStatus('error');
-          setDownloadProgress(0);
-          setStatusMessage(`Export error: ${errMsg}`);
-          setTimeout(() => {
-            setStatusMessage('');
-            setDownloadStatus('idle');
-          }, 6000);
-          return;
-        }
-      }
-
+      console.log('[ClipFlow editor] Download finished:', done);
       setDownloadStatus('success');
       setDownloadProgress(100);
-      setStatusMessage('Clip downloaded successfully!');
-
+      setStatusMessage(`Saved ${done.filename} to your Downloads folder`);
       setTimeout(() => {
         setStatusMessage('');
         setDownloadStatus('idle');
         setDownloadProgress(0);
-      }, 3000);
-
+      }, 5000);
       saveToHistory({
-        title: customFileName || metadata?.title || 'Untitled Clip',
+        title: customFileName || metadata?.title || 'ClipFlow clip',
         url: activeUrl,
-        thumbnail: metadata?.thumbnail || '',
-        duration: isTrimEnabled
-          ? `${formatTime(trimRange[0])} - ${formatTime(trimRange[1])} (${formatTime(trimRange[1] - trimRange[0])})`
-          : `Full Video (${formatTime(metadata?.duration || 0)})`,
+        platform,
+        format: effectiveFormat,
         quality: downloadQuality,
-        aspectRatio: aspectRatio,
+        duration: Math.max(1, effectiveTrimEnd - effectiveTrimStart),
       });
     } catch (err: any) {
-      console.error('[Download Error]', err);
+      console.error('[ClipFlow Editor] Export failed:', err);
       setDownloadStatus('error');
       setDownloadProgress(0);
-      setStatusMessage(err.message || 'Download failed');
+      setStatusMessage(err?.message || 'Export failed. Please try again.');
+      setTimeout(() => {
+        setStatusMessage('');
+        setDownloadStatus('idle');
+        setDownloadProgress(0);
+      }, 4000);
     } finally {
       setIsDownloading(false);
     }
@@ -1208,6 +1002,14 @@ export default function ClipFlowEditor() {
   const isDraggingSplitter = isDraggingHSplitter || isDraggingVSplitter || isDraggingLSplitter;
 
   return (
+    <>
+    {extensionPromptAction && (
+      <ExtensionInstallPrompt
+        onClose={() => setExtensionPromptAction(null)}
+        onDetected={() => extensionPromptAction()}
+        reason={errorMeta === 'extension' ? 'preview' : 'download'}
+      />
+    )}
     <div className={`flex h-[100dvh] w-screen overflow-hidden bg-black text-[#f8fafc] selection:bg-purple-500/30 ${
       isDraggingVSplitter ? 'select-none cursor-col-resize' : isDraggingHSplitter ? 'select-none cursor-row-resize' : ''
     }`}>
@@ -1250,11 +1052,21 @@ export default function ClipFlowEditor() {
                   <AlertCircle className="w-8 h-8 text-zinc-400 stroke-[1.5]" />
                 </div>
                 <div className="space-y-1.5 max-w-sm">
-                  <h2 className="text-lg font-bold text-white tracking-tight">Something went wrong</h2>
+                  <h2 className="text-lg font-bold text-white tracking-tight">{errorMeta === 'extension' ? 'Preview needs the free extension' : 'Something went wrong'}</h2>
                   <p className="text-sm text-zinc-400">
-                    We couldn't load this video preview. Please verify the link or try another video.
+                    {errorMeta === 'extension'
+                      ? 'This site only lets your own browser load its videos. Install the ClipFlow extension once to preview, edit and download.'
+                      : "We couldn't load this video preview. Please verify the link or try another video."}
                   </p>
                 </div>
+                {errorMeta === 'extension' && (
+                  <button
+                    onClick={() => setExtensionPromptAction(() => () => window.location.reload())}
+                    className="mt-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition-all cursor-pointer"
+                  >
+                    Get the extension
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setErrorMeta('');
@@ -1561,7 +1373,7 @@ export default function ClipFlowEditor() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Built-in local ffmpeg & yt-dlp acceleration</span>
+                  <span>Processing runs on your device via the ClipFlow extension</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -1585,5 +1397,6 @@ export default function ClipFlowEditor() {
         )}
       </AnimatePresence>
     </div>
+    </>
   );
 }

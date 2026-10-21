@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { AuthModal } from '../components/AuthModal';
 import { UserProfileMenu } from '../components/UserProfileMenu';
+import { ExtensionButton } from '../components/ExtensionButton';
 import { setStoredProcessingMode } from '../utils/editorSession';
 import { api } from '../services/api';
 
@@ -175,6 +176,7 @@ export default function ClipFlowHome() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2.5 shrink-0">
+            <ExtensionButton />
             <UserProfileMenu onOpenAuth={() => setShowAuthModal(true)} />
           </div>
         </div>

@@ -5,15 +5,10 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import { createServer } from 'http';
-import { SocketService } from './services/socket.service.js';
-import videoRoutes from './routes/video.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import googleRoutes from './routes/google.routes.js';
-import videosRoutes from './routes/videos.routes.js';
-import driveRoutes from './routes/drive.routes.js';
-import twitchRoutes from './routes/twitch.routes.js';
-import twitchLiveChannelRoutes from './routes/twitch-live-channel.routes.js';
 import appRequestRoutes from './routes/app-request.routes.js';
+import downloadsRoutes from './routes/downloads.routes.js';
 import path from 'path';
 import fs from 'fs';
 import { logger } from './utils/logger.util.js';
@@ -55,8 +50,9 @@ mongoose.connection.on('reconnected', () => {
 
 connectWithRetry();
 
+// All video work (resolving, downloading, ffmpeg) happens in the user's browser extension.
+// This server only handles accounts, Google login, the waitlist and the download log/history.
 const httpServer = createServer(app);
-SocketService.initialize(httpServer);
 
 // Security Headers
 app.use(
@@ -97,8 +93,13 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logger middleware (summarizes in console, writes full raw data to app.log)
+// One line per request, printed when the response finishes: METHOD url [status] ms user
 app.use((req, res, next) => {
-  logger.http(req.method, req.originalUrl || req.url);
+  const start = Date.now();
+  res.on('finish', () => {
+    const userId = (req as any).userId;
+    logger.http(req.method, req.originalUrl || req.url, res.statusCode, Date.now() - start, userId);
+  });
   next();
 });
 
@@ -132,11 +133,7 @@ app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/google', googleRoutes);
 app.use('/api/auth/google', googleRoutes);
-app.use('/api/videos', videosRoutes);
-app.use('/api/video', videoRoutes);
-app.use('/api/drive', driveRoutes);
-app.use('/api/twitch', twitchRoutes);
-app.use('/api/twitch-live', twitchLiveChannelRoutes); // Live channel chunk preview (no CDN)
+app.use('/api/downloads', downloadsRoutes); // download log + history (the user's library)
 app.use('/api/app-requests', appRequestRoutes);
 app.use('/api/waitlist', appRequestRoutes);
 

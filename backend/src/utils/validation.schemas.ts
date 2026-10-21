@@ -60,3 +60,19 @@ export const changePasswordSchema = z.object({
 export const selectPlanSchema = z.object({
   plan: z.enum(['free', 'pro', 'business']),
 });
+
+export const downloadLogSchema = z.object({
+  jobId: z.string().min(1).max(64),
+  anonId: z.string().max(64).optional(),
+  platform: z.enum(['youtube', 'instagram', 'twitter', 'twitch']),
+  kind: z.string().max(32).optional(),
+  url: z.string().url().max(2048),
+  title: z.string().max(500).optional(),
+  quality: z.string().max(32).optional(),
+  sizeBytes: z.number().nonnegative().optional(),
+  durationSec: z.number().nonnegative().optional(),
+  status: z.enum(['started', 'completed', 'failed', 'cancelled']),
+  error: z.string().max(1000).optional(),
+  extVersion: z.string().max(32).optional(),
+  build: z.enum(['store', 'full']).optional(),
+});

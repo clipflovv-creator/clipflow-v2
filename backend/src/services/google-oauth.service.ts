@@ -26,7 +26,7 @@ export class GoogleOAuthService {
 
   /**
    * Generates Google OAuth consent URL.
-   * Can be called by unauthenticated users (for 1-click Google sign-in/registration) or authenticated users (to link Google Drive).
+   * Can be called by unauthenticated users (for 1-click Google sign-in/registration) or authenticated users (to link their Google account).
    */
   public static generateConnectUrl(userId: string = 'new'): { url: string; state: string } {
     const oauth2Client = this.getOAuth2Client();
@@ -130,7 +130,7 @@ export class GoogleOAuthService {
         name,
         passwordHash: dummyPasswordHash,
         emailVerified: true, // Google emails are already verified by Google
-        plan: 'pro', // Default to Pro for Google Drive cloud access
+        plan: 'pro',
       });
     } else {
       // Mark email as verified if they authenticated via Google
@@ -170,62 +170,7 @@ export class GoogleOAuthService {
   }
 
   /**
-   * Returns an authorized Google OAuth2 client for a user, automatically refreshing expired tokens.
-   */
-  public static async getAuthenticatedClient(userId: Types.ObjectId | string) {
-    const connection = await GoogleOAuthConnectionModel.findOne({
-      userId: new Types.ObjectId(userId.toString()),
-      isConnected: true,
-    });
-
-    if (!connection) {
-      throw new Error('Google Drive account is not connected. Please connect Google Drive in your settings.');
-    }
-
-    const accessToken = decryptText(connection.encryptedAccessToken);
-    const refreshToken = connection.encryptedRefreshToken
-      ? decryptText(connection.encryptedRefreshToken)
-      : undefined;
-
-    const oauth2Client = this.getOAuth2Client();
-    oauth2Client.setCredentials({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-
-    // Check if token is expired or within 2 minutes of expiry
-    const isExpired = connection.tokenExpiry
-      ? new Date(connection.tokenExpiry).getTime() <= Date.now() + 2 * 60 * 1000
-      : false;
-
-    if (isExpired && refreshToken) {
-      try {
-        const { credentials } = await oauth2Client.refreshAccessToken();
-        oauth2Client.setCredentials(credentials);
-
-        if (credentials.access_token) {
-          connection.encryptedAccessToken = encryptText(credentials.access_token);
-          if (credentials.refresh_token) {
-            connection.encryptedRefreshToken = encryptText(credentials.refresh_token);
-          }
-          if (credentials.expiry_date) {
-            connection.tokenExpiry = new Date(credentials.expiry_date);
-          }
-          await connection.save();
-        }
-      } catch (err: any) {
-        console.error('[GoogleOAuthService] Token refresh failed:', err.message);
-        connection.isConnected = false;
-        await connection.save();
-        throw new Error('Google Drive authorization has expired or been revoked. Please reconnect Google Drive.');
-      }
-    }
-
-    return { oauth2Client, connection };
-  }
-
-  /**
-   * Disconnects Google Drive for a user.
+   * Unlinks the user's Google account.
    */
   public static async disconnect(userId: Types.ObjectId | string): Promise<void> {
     const connection = await GoogleOAuthConnectionModel.findOne({

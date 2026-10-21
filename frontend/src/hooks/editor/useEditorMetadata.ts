@@ -215,7 +215,7 @@ export function useEditorMetadata(
             clearTimeout(timeoutId);
             if (!res.ok) {
               const errJson = await res.json().catch(() => ({}));
-              throw new Error(errJson.error || `Failed to fetch metadata (status: ${res.status})`);
+              throw Object.assign(new Error(errJson.error || `Failed to fetch metadata (status: ${res.status})`), { status: res.status });
             }
             return await res.json();
           } catch (err: any) {
@@ -264,7 +264,7 @@ export function useEditorMetadata(
       const isYt = Boolean(extractYouTubeId(cleanTargetUrl));
       if (!isTwitchLiveNow && !isYt) {
         console.error('[ClipFlow Editor] Error loading video metadata:', err);
-        setErrorMeta('error');
+        setErrorMeta(err?.status === 412 ? 'extension' : 'error');
       } else if (isYt) {
         console.warn('[ClipFlow Editor] Backend stream fetch delayed/failed, but YouTube iframe player remains functional:', err);
       }
