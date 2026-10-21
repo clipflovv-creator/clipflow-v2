@@ -57,11 +57,11 @@
   "rewrites": [
     {
       "source": "/health",
-      "destination": "https://clipflow-qo0b.onrender.com/health"
+      "destination": "https://clipflow-backend-t4fm.onrender.com/health"
     },
     {
       "source": "/api/:path*",
-      "destination": "https://clipflow-qo0b.onrender.com/api/:path*"
+      "destination": "https://clipflow-backend-t4fm.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",
