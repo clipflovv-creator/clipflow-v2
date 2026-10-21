@@ -58,30 +58,28 @@ export default function ExtensionInstallPrompt({ onClose, onDetected, reason = '
               <a href={extensionBridge.storeUrl} target="_blank" rel="noopener noreferrer"
                 className="block w-full rounded-xl bg-blue-600 px-4 py-2.5 text-center font-semibold text-white hover:bg-blue-500">Add to Chrome</a>
             )}
-            <div className="space-y-2">
-              <a
-                href={extensionBridge.installerBatUrl}
-                download="install-clipflow.bat"
-                className="flex items-center justify-center gap-2 w-full rounded-xl bg-blue-600 px-4 py-2.5 text-center font-semibold text-white hover:bg-blue-500 shadow-md shadow-blue-600/20 transition-all cursor-pointer"
-              >
-                <span>⚡ 1-Click Windows Setup (.bat)</span>
-              </a>
-              <a
-                href={extensionBridge.installUrl}
-                download="clipflow-extension.zip"
-                className="block w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-center text-xs font-medium text-slate-300 hover:bg-white/10 hover:text-white transition-all cursor-pointer"
-              >
-                Download manual package (.zip)
-              </a>
-            </div>
+            <a
+              href={extensionBridge.installUrl}
+              download="clipflow-extension.zip"
+              className="flex items-center justify-center gap-2 w-full rounded-xl bg-blue-600 px-4 py-2.5 text-center font-semibold text-white hover:bg-blue-500 shadow-md shadow-blue-600/20 transition-all cursor-pointer"
+            >
+              <span>Download Extension (.zip)</span>
+            </a>
 
             <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-300">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-blue-400">Quick 2-step setup:</div>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-blue-400">Easy 3-step setup:</div>
               <ol className="list-decimal space-y-1.5 pl-4 leading-relaxed">
-                <li>Run <b className="text-white">install-clipflow.bat</b> (it copies the folder path and opens Chrome).</li>
-                <li>In Chrome, switch on <b className="text-white">Developer mode</b> (top right).</li>
-                <li>Click <b className="text-white">Load unpacked</b>, press <b className="text-white">Ctrl+V</b> to paste the folder, and hit Enter.</li>
+                <li>Unzip <b className="text-white">clipflow-extension.zip</b> on your device.</li>
+                <li>
+                  Double-click <b className="text-white">install.bat</b> inside the folder (it copies the path and opens Chrome).
+                </li>
+                <li>
+                  In Chrome (<span className="font-mono text-white">chrome://extensions</span>), turn on <b className="text-white">Developer mode</b>, click <b className="text-white">Load unpacked</b>, press <b className="text-white">Ctrl+V</b>, and hit Enter.
+                </li>
               </ol>
+              <div className="pt-2 text-[11px] text-slate-400 border-t border-white/5">
+                <span className="text-slate-500">Mac/Linux:</span> Unzip and select the folder directly via <b className="text-slate-300">Load unpacked</b>.
+              </div>
             </div>
           </div>
         )}

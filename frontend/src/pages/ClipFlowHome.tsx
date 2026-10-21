@@ -611,22 +611,13 @@ export default function ClipFlowHome() {
                   <li>✓ Captions and subtitles exported with your clip</li>
                   <li>✓ No limits, no queue, no subscription</li>
                 </ul>
-                <div className="mt-auto flex flex-col gap-2">
-                  <a
-                    href="/extension/install.bat"
-                    download="install-clipflow.bat"
-                    className="block w-full rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2.5 text-center text-sm font-semibold text-white cursor-pointer shadow-lg shadow-blue-600/20 transition-all"
-                  >
-                    ⚡ 1-Click Windows Setup (.bat)
-                  </a>
-                  <a
-                    href="/extension/clipflow-extension.zip"
-                    download="clipflow-extension.zip"
-                    className="block w-full rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 px-4 py-2 text-center text-xs font-medium text-zinc-300 hover:text-white cursor-pointer transition-all"
-                  >
-                    Download extension (.zip)
-                  </a>
-                </div>
+                <a
+                  href="/extension/clipflow-extension.zip"
+                  download="clipflow-extension.zip"
+                  className="mt-auto block w-full rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2.5 text-center text-sm font-semibold text-white cursor-pointer shadow-lg shadow-blue-600/20 transition-all"
+                >
+                  Get the free extension (.zip)
+                </a>
               </div>
             </div>
 

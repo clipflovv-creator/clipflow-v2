@@ -215,17 +215,6 @@ app.get('/extension/clipflow-extension.zip', (_req: Request, res: Response) => {
   res.download(zipFile, 'clipflow-extension.zip');
 });
 
-app.get(['/extension/install.bat', '/extension/install-clipflow.bat'], (_req: Request, res: Response) => {
-  const candidates = [
-    path.join(process.cwd(), 'frontend', 'public', 'extension', 'install.bat'),
-    path.join(process.cwd(), '..', 'frontend', 'public', 'extension', 'install.bat'),
-  ];
-  const batFile = candidates.find(c => fs.existsSync(c));
-  if (!batFile) {
-    return res.status(404).json({ error: 'Installer script not found' });
-  }
-  res.download(batFile, 'install-clipflow.bat');
-});
 
 const extDirCandidates = [
   path.join(process.cwd(), 'frontend', 'public', 'extension'),

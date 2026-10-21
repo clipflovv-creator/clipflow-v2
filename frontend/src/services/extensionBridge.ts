@@ -330,8 +330,6 @@ export const extensionBridge = {
 
   /** Where users get the extension (self-hosted full build, zipped by extension/build.mjs). */
   installUrl: '/extension/clipflow-extension.zip',
-  /** 1-Click automated Windows setup script. */
-  installerBatUrl: '/extension/install.bat',
   /** Chrome Web Store listing (store build, no YouTube). Set VITE_EXTENSION_STORE_URL once published. */
   storeUrl: (import.meta.env.VITE_EXTENSION_STORE_URL as string | undefined) || '',
 
