@@ -66,21 +66,13 @@ export default function ExtensionInstallPrompt({ onClose, onDetected, reason = '
               <span>Download Extension (.zip)</span>
             </a>
 
-            <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-300">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-blue-400">1-Click Automated Setup:</div>
-              <ol className="list-decimal space-y-1.5 pl-4 leading-relaxed">
-                <li>Unzip <b className="text-white">clipflow-extension.zip</b> on your computer.</li>
-                <li>
-                  Double-click <b className="text-white">install.bat</b> inside the unzipped folder.
-                </li>
-                <li>
-                  Done! Chrome launches automatically with the ClipFlow extension active.
-                </li>
-              </ol>
-              <div className="pt-2 text-[11px] text-slate-400 border-t border-white/5">
-                <span className="text-slate-500">Mac/Linux:</span> In <span className="font-mono text-slate-300">chrome://extensions</span>, turn on Developer mode and select the unzipped folder via <b className="text-slate-300">Load unpacked</b>.
-              </div>
-            </div>
+            <ol className="list-decimal space-y-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-4 pl-8 text-xs text-slate-300">
+              <li>Unzip the downloaded file.</li>
+              <li>Open <span className="rounded bg-white/10 px-1 font-mono text-white">chrome://extensions</span> in a new tab.</li>
+              <li>Turn on <b className="text-white">Developer mode</b> (top right).</li>
+              <li>Click <b className="text-white">Load unpacked</b> and choose the unzipped folder.</li>
+              <li>Come back here. The download continues automatically.</li>
+            </ol>
           </div>
         )}
 
