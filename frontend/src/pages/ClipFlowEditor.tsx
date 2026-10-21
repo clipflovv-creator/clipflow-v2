@@ -675,6 +675,17 @@ export default function ClipFlowEditor() {
     }, 5000);
   };
 
+  // Records downloads that don't go through extensionBridge.download (thumbnail, canvas frame, captions).
+  const logLocalDownload = (action: 'frame' | 'thumbnail' | 'captions', output: string, extra: Record<string, unknown> = {}) => {
+    const platform = platformOf(activeUrl);
+    if (!platform) return;
+    void extensionBridge.log({
+      platform, url: activeUrl, title: metadata?.title, author: metadata?.uploader, videoId: metadata?.id,
+      sourceDurationSec: metadata?.duration || undefined, status: 'completed', action, output,
+      aspectRatio, fitMode, ...extra,
+    });
+  };
+
   // Thumbnail / Frame Snapshot Download (PNG Only)
   const handleDownloadImage = async () => {
     if (isDownloadingImage) return;
@@ -692,6 +703,15 @@ export default function ClipFlowEditor() {
           const res = await fetch(thumbUrl, { mode: 'cors' });
           if (res.ok) blob = await res.blob();
         } catch {}
+        // Instagram / X / Twitch image CDNs send no CORS headers: fetch the bytes through the extension.
+        if (!blob && (await extensionBridge.detect())) {
+          try {
+            const res = await extensionBridge.fetchMedia(thumbUrl);
+            if (res.ok) blob = new Blob([await res.arrayBuffer()]);
+          } catch (err) {
+            console.warn('[ClipFlow editor] thumbnail via extension failed', err);
+          }
+        }
 
         if (blob) {
           const bitmap = await createImageBitmap(blob);
@@ -704,6 +724,7 @@ export default function ClipFlowEditor() {
             const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
             if (pngBlob) {
               triggerNativeDownload(pngBlob, `${cleanTitle}_thumbnail.png`);
+              logLocalDownload('thumbnail', 'png', { sizeBytes: pngBlob.size });
               setDownloadSuccess(true);
               setTimeout(() => setDownloadSuccess(false), 2000);
               return;
@@ -726,6 +747,7 @@ export default function ClipFlowEditor() {
         const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
         if (pngBlob) {
           triggerNativeDownload(pngBlob, `${cleanTitle}_thumbnail.png`);
+          logLocalDownload('thumbnail', 'png', { sizeBytes: pngBlob.size });
           setDownloadSuccess(true);
           setTimeout(() => setDownloadSuccess(false), 2000);
           return;
@@ -737,13 +759,19 @@ export default function ClipFlowEditor() {
         const cropSuffix = isCropped ? `_${aspectRatio.replace(':', 'x')}` : '';
         const fileName = `${cleanTitle}_frame_${timeStr}${cropSuffix}.png`;
 
+        // Same framing rules as the video export: crop box in crop / custom mode, preset crop or padding otherwise.
+        const useCrop = aspectRatio === 'custom' || fitMode === 'crop';
+        const videoFilter = buildVideoFilter(aspectRatio, fitMode, cropPosition, useCrop ? cropBox ?? undefined : undefined) ?? undefined;
+        // The canvas can only reproduce "no framing" or a plain crop to the crop box; padding and preset crops go to ffmpeg.
+        const boxCrop = !!videoFilter && useCrop && !!cropBox && videoFilter.startsWith('crop=trunc(iw*');
+
         // 1. Client-side canvas frame capture when HTML5 video is playing
-        if (videoElementRef.current && videoElementRef.current.videoWidth > 0) {
+        if (videoElementRef.current && videoElementRef.current.videoWidth > 0 && (!videoFilter || boxCrop)) {
           try {
             const v = videoElementRef.current;
             const canvas = document.createElement('canvas');
             let sx = 0, sy = 0, sw = v.videoWidth, sh = v.videoHeight;
-            if (isCropped && cropBox) {
+            if (boxCrop && cropBox) {
               sx = Math.round(cropBox.x * v.videoWidth);
               sy = Math.round(cropBox.y * v.videoHeight);
               sw = Math.round(cropBox.width * v.videoWidth);
@@ -757,6 +785,7 @@ export default function ClipFlowEditor() {
               const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
               if (pngBlob) {
                 triggerNativeDownload(pngBlob, fileName);
+                logLocalDownload('frame', 'png', { sizeBytes: pngBlob.size, startSec: targetTime, edited: boxCrop });
                 setDownloadSuccess(true);
                 setTimeout(() => setDownloadSuccess(false), 2000);
                 return;
@@ -769,9 +798,6 @@ export default function ClipFlowEditor() {
 
         // 2. Full-resolution frame via the extension (ffmpeg.wasm), saved into Downloads.
         //    Used for YouTube (embedded player can't be captured) and when the canvas capture fails.
-        const videoFilter = isCropped
-          ? buildVideoFilter(aspectRatio, fitMode, cropPosition, cropBox ?? undefined) ?? undefined
-          : undefined;
         if (!(await extensionBridge.detect())) {
           setExtensionPromptAction(() => () => void handleDownloadImage());
           throw new Error('ClipFlow extension not installed');
@@ -787,7 +813,7 @@ export default function ClipFlowEditor() {
           }, (e) => {
             if (e.event === 'done') resolve();
             else if (e.event === 'error') reject(new Error(e.message));
-          });
+          }, { action: 'frame', aspectRatio, fitMode });
         });
         setDownloadSuccess(true);
         setTimeout(() => setDownloadSuccess(false), 2000);
@@ -857,6 +883,10 @@ export default function ClipFlowEditor() {
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 
+        logLocalDownload('captions', captionFormat, {
+          captionLang: caps.lang, startSec: effectiveTrimStart, endSec: effectiveTrimEnd,
+          clipSec: Math.max(0, effectiveTrimEnd - effectiveTrimStart), sizeBytes: blob.size,
+        });
         setDownloadStatus('success');
         setDownloadProgress(100);
         setStatusMessage(data.message || `Subtitles (${captionFormat.toUpperCase()}) downloaded successfully.`);
@@ -911,6 +941,7 @@ export default function ClipFlowEditor() {
         maxHeight: parseInt(String(downloadQuality || ''), 10) || undefined,
         videoFilter: videoFilter ?? undefined,
         output: output as 'mp4' | 'mp3' | 'm4a' | 'wav',
+        audioBitrate: output !== 'mp4' && downloadAudioBitrate !== '0' ? downloadAudioBitrate : undefined,
         filename: customFileName || metadata?.title || 'ClipFlow clip',
       };
       console.log('[ClipFlow editor] Sending requirements to extension:', options);
@@ -933,7 +964,7 @@ export default function ClipFlowEditor() {
           else if (e.event === 'error') {
             reject(new Error(e.message));
           }
-        });
+        }, { action: output === 'mp4' ? 'video' : 'audio', aspectRatio, fitMode });
       });
 
       console.log('[ClipFlow editor] Download finished:', done);

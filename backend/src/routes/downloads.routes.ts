@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { requireAuth, optionalAuth, AuthenticatedRequest } from '../middlewares/auth.middleware.js';
 import { DownloadLog } from '../models/DownloadLog.model.js';
 import { downloadLogSchema } from '../utils/validation.schemas.js';
+import { clientInfo } from '../utils/client-info.util.js';
 
 const router = Router();
 
@@ -24,7 +25,16 @@ router.post('/log', optionalAuth, async (req: AuthenticatedRequest, res: Respons
     if (existing && String(existing.userId ?? '') !== String(req.userId ?? '') && existing.anonId !== fields.anonId) {
       return res.status(409).json({ error: 'jobId belongs to another user' });
     }
-    await DownloadLog.updateOne({ jobId }, { $set: { ...fields, ...owner }, $setOnInsert: { jobId } }, { upsert: true });
+    // Country / browser are taken from the first request of a job (the click), not overwritten later.
+    const client = clientInfo(req);
+    await DownloadLog.updateOne({ jobId }, { $set: { ...fields, ...owner }, $setOnInsert: { jobId, ...client } }, { upsert: true });
+    if (fields.status !== 'started') {
+      // One line per finished download, e.g. "[download] completed youtube audio mp3 10s 0.4MB IN".
+      const f = fields;
+      console.log(['[download]', f.status, f.platform, f.action, f.output, f.quality,
+        f.clipSec != null ? `${Math.round(f.clipSec)}s` : '', f.sizeBytes ? `${(f.sizeBytes / 1e6).toFixed(1)}MB` : '',
+        client.country, f.status === 'failed' ? `"${f.error?.slice(0, 80)}"` : ''].filter(Boolean).join(' '));
+    }
     return res.status(204).end();
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to store download log' });

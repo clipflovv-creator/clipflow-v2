@@ -45,6 +45,15 @@ export interface DownloadOptions {
   maxHeight?: number;     // best format at or below this height
   videoFilter?: string;   // ffmpeg -vf chain (crop / aspect ratio)
   output?: 'mp4' | 'mp3' | 'm4a' | 'wav' | 'jpg' | 'png';   // jpg/png = one frame at startSec
+  audioBitrate?: string;  // mp3 / m4a, e.g. '320k'; omitted → best
+}
+
+/** Extra context for the download log (analytics), set by the editor. */
+export interface DownloadLogMeta {
+  action?: 'video' | 'audio' | 'frame' | 'thumbnail' | 'captions';
+  aspectRatio?: string;
+  fitMode?: string;
+  captionLang?: string;
 }
 
 export interface ExtensionStatus {
@@ -239,13 +248,22 @@ function getStreamsShared(url: string): Promise<MediaInfo & { rawStreams: any[] 
   return p;
 }
 
+/** Coarse client context for analytics (country itself is derived server-side). */
+function clientEnv() {
+  try {
+    return { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, language: navigator.language };
+  } catch {
+    return {};
+  }
+}
+
 async function logDownload(body: Record<string, unknown>) {
   try {
     await fetch(`${BACKEND_URL}/api/downloads/log`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ anonId: anonId(), extVersion: status?.version, build: status?.build, ...body }),
+      body: JSON.stringify({ anonId: anonId(), extVersion: status?.version, build: status?.build, ...clientEnv(), ...body }),
     });
   } catch {
     // Logging must never break a download.
@@ -316,8 +334,10 @@ export const extensionBridge = {
   storeUrl: (import.meta.env.VITE_EXTENSION_STORE_URL as string | undefined) || '',
 
   /** Records a download for analytics (logged-in or anonymous). Never throws. */
-  log(body: {
-    jobId?: string; platform: Platform; kind?: string; url: string; title?: string; quality?: string;
+  log(body: DownloadLogMeta & {
+    jobId?: string; platform: Platform; kind?: string; url: string; title?: string; quality?: string; output?: string;
+    videoId?: string; author?: string; sourceDurationSec?: number; startSec?: number; endSec?: number; clipSec?: number;
+    edited?: boolean; elapsedMs?: number;
     sizeBytes?: number; durationSec?: number; status: 'started' | 'completed' | 'failed' | 'cancelled'; error?: string;
   }) {
     return logDownload({ ...body, jobId: body.jobId || crypto.randomUUID() });
@@ -331,11 +351,22 @@ export const extensionBridge = {
    * Starts a download. onEvent gets started/progress/done/error.
    * Each download is logged to the backend as started → completed/failed/cancelled.
    */
-  download(url: string, options: DownloadOptions, onEvent: (e: DownloadEvent) => void): void {
+  download(url: string, options: DownloadOptions, onEvent: (e: DownloadEvent) => void, meta: DownloadLogMeta = {}): void {
     let started: Extract<DownloadEvent, { event: 'started' }> | null = null;
+    const t0 = performance.now();
+    const output = options.output ?? 'mp4';
+    const hasRange = options.startSec !== undefined && options.endSec !== undefined;
+    // Sent with every update of this job so each document is complete whichever update arrives last.
     const base = () => started && {
       jobId: started.jobId, platform: started.info.platform, kind: started.info.kind, url: started.info.url,
       title: started.info.title, quality: started.formatLabel, extVersion: status?.version, build: status?.build,
+      videoId: started.info.id, author: started.info.author, isLive: started.info.kind === 'live',
+      sourceDurationSec: started.info.durationSec,
+      action: meta.action ?? (output === 'png' || output === 'jpg' ? 'frame' : output === 'mp4' ? 'video' : 'audio'),
+      output, maxHeight: options.maxHeight, audioBitrate: options.audioBitrate,
+      startSec: options.startSec, endSec: options.endSec,
+      clipSec: hasRange ? Math.max(0, options.endSec! - options.startSec!) : options.maxLiveSec,
+      edited: !!options.videoFilter, aspectRatio: meta.aspectRatio, fitMode: meta.fitMode,
     };
     console.log('[ClipFlow bridge] download →', url, options);
     send({ type: 'download', url, options }, (d: DownloadEvent) => {
@@ -348,9 +379,15 @@ export const extensionBridge = {
         started = d;
         void logDownload({ ...base(), status: 'started' });
       } else if (d.event === 'done') {
-        void logDownload({ ...base(), status: 'completed', sizeBytes: d.sizeBytes, durationSec: d.durationSec });
+        void logDownload({ ...base(), status: 'completed', sizeBytes: d.sizeBytes, durationSec: d.durationSec, elapsedMs: Math.round(performance.now() - t0) });
       } else if (d.event === 'error' && started) {
-        void logDownload({ ...base(), status: d.message === 'Cancelled' ? 'cancelled' : 'failed', error: d.message.slice(0, 1000) });
+        void logDownload({ ...base(), status: d.message === 'Cancelled' ? 'cancelled' : 'failed', error: d.message.slice(0, 1000), elapsedMs: Math.round(performance.now() - t0) });
+      } else if (d.event === 'error' && platformOf(url)) {
+        // Failed before the extension resolved the link (unsupported / private / blocked): still worth recording.
+        void logDownload({
+          jobId: crypto.randomUUID(), platform: platformOf(url), url, status: 'failed', error: d.message.slice(0, 1000),
+          action: meta.action, output, elapsedMs: Math.round(performance.now() - t0),
+        });
       }
       return d.event === 'done' || d.event === 'error';
     });

@@ -16,6 +16,8 @@ const SITE_MATCHES = [
   'http://localhost:5173/*',
   'http://localhost:3000/*',
   'http://127.0.0.1:5173/*',
+  'https://clipflow.cliy.me/*',
+  'https://clipflow-v2.vercel.app/*',
 ];
 
 const PLATFORM_HOSTS = {
@@ -25,7 +27,10 @@ const PLATFORM_HOSTS = {
   twitch: ['https://*.twitch.tv/*', 'https://*.ttvnw.net/*', 'https://*.jtvnw.net/*', 'https://*.cloudfront.net/*'],
 };
 
-const SITE_ORIGINS = SITE_MATCHES.map((m) => m.replace(/\/\*$/, ''));
+// The store build only talks to production sites (reviewers flag localhost host permissions).
+const SITE_MATCHES_BUILD = build === 'store' ? SITE_MATCHES.filter((m) => !m.includes('localhost') && !m.includes('127.0.0.1')) : SITE_MATCHES;
+
+const SITE_ORIGINS = SITE_MATCHES_BUILD.map((m) => m.replace(/\/\*$/, ''));
 const DEFINE = {
   __BUILD__: JSON.stringify(build),
   __VERSION__: JSON.stringify(pkg.version),
@@ -41,16 +46,18 @@ const manifest = {
   name: build === 'full' ? 'ClipFlow Downloader' : 'ClipFlow',
   version: pkg.version,
   description: 'Downloads and processes video on your device for the ClipFlow website.',
+  icons: { 16: 'icon16.png', 48: 'icon48.png', 128: 'icon128.png' },
+  action: { default_icon: { 16: 'icon16.png', 48: 'icon48.png', 128: 'icon128.png' } },
   background: { service_worker: 'background.js', type: 'module' },
   permissions: ['offscreen', 'downloads', 'declarativeNetRequest', 'cookies', 'storage', 'scripting',
     ...(build === 'full' ? ['declarativeNetRequestFeedback'] : [])],
   // Site origins too: Chrome only lets header rules touch requests whose initiator the extension can access
   // (needed so preview <video> requests from the ClipFlow site get the right Referer).
-  host_permissions: [...hosts, ...SITE_MATCHES],
-  content_scripts: [{ matches: SITE_MATCHES, js: ['content.js'], run_at: 'document_start' }],
+  host_permissions: [...hosts, ...SITE_MATCHES_BUILD],
+  content_scripts: [{ matches: SITE_MATCHES_BUILD, js: ['content.js'], run_at: 'document_start' }],
   sandbox: { pages: ['sandbox.html'] },
   // The website embeds relay.html (hidden iframe) to fetch media bytes from the user's IP.
-  web_accessible_resources: [{ resources: ['relay.html', 'relay.js'], matches: SITE_MATCHES }],
+  web_accessible_resources: [{ resources: ['relay.html', 'relay.js'], matches: SITE_MATCHES_BUILD }],
   // ffmpeg.wasm needs WebAssembly compilation in extension pages.
   content_security_policy: {
     extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
