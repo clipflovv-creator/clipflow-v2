@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { ExportFormatSection } from '../ExportFormatSection';
 import type { QualityOption } from '../../hooks/editor/useEditorMetadata';
+import { formatTime } from '../../utils/timecode';
 
 interface EditorExportPanelProps {
   rightPanelWidth: number;
@@ -46,20 +47,6 @@ interface EditorExportPanelProps {
   estimatedBytes: number;
 }
 
-function formatTime(seconds: number, includeDecimals: boolean = false): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-
-  if (h > 0) {
-    const main = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    return includeDecimals ? `${main}.${ms}` : main;
-  }
-  const main = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return includeDecimals ? `${main}.${ms}` : main;
-}
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '';

@@ -2,9 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import * as Slider from '@radix-ui/react-slider';
 import {
   RotateCcw, RotateCw, Play, Pause,
-  Volume2, VolumeX, Settings, ChevronDown, Check
+  Volume2, VolumeX, Settings, ChevronDown, Check, Repeat
 } from 'lucide-react';
 import type { PreviewQualityTier } from '../../hooks/editor/useEditorMetadata';
+import { formatTime, parseTime, hasFraction } from '../../utils/timecode';
+import { useLoopPreference } from '../../utils/loopPreference';
 
 interface EditorPlaybackControlsProps {
   currentTime: number;
@@ -30,33 +32,7 @@ interface EditorPlaybackControlsProps {
   handleSelectPreviewQuality: (q: PreviewQualityTier) => void;
 }
 
-function formatTime(seconds: number, includeDecimals: boolean = false): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
 
-  if (h > 0) {
-    const main = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    return includeDecimals ? `${main}.${ms}` : main;
-  }
-  const main = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return includeDecimals ? `${main}.${ms}` : main;
-}
-
-function parseTime(timeStr: string): number {
-  if (!timeStr) return 0;
-  const cleanStr = String(timeStr).trim();
-  const parts = cleanStr.split(':').map(Number);
-  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-    return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  }
-  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-    return parts[0] * 60 + parts[1];
-  }
-  return parseFloat(cleanStr) || 0;
-}
 
 export function EditorPlaybackControls({
   currentTime,
@@ -83,6 +59,7 @@ export function EditorPlaybackControls({
 }: EditorPlaybackControlsProps) {
   const [isEditingTime, setIsEditingTime] = useState(false);
   const [timeInputValue, setTimeInputValue] = useState('');
+  const [loopOn, setLoopOn] = useLoopPreference();
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
   const qualityMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -199,7 +176,7 @@ export function EditorPlaybackControls({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   const parsed = parseTime(timeInputValue);
-                  if (!isNaN(parsed)) {
+                  if (parsed !== null) {
                     const clamped = Math.max(0, Math.min(parsed, effectiveDuration > 0 ? effectiveDuration : parsed));
                     seekToPosition(clamped);
                   }
@@ -210,31 +187,45 @@ export function EditorPlaybackControls({
               }}
               onBlur={() => {
                 const parsed = parseTime(timeInputValue);
-                if (!isNaN(parsed)) {
+                if (parsed !== null) {
                   const clamped = Math.max(0, Math.min(parsed, effectiveDuration > 0 ? effectiveDuration : parsed));
                   seekToPosition(clamped);
                 }
                 setIsEditingTime(false);
               }}
-              className="w-16 bg-zinc-900 border border-zinc-700 rounded px-1 text-center font-bold text-white text-[12px] focus:outline-none focus:ring-1 focus:ring-zinc-400"
+              className="w-20 bg-zinc-900 border border-zinc-700 rounded px-1 text-center font-bold text-white text-[12px] focus:outline-none focus:ring-1 focus:ring-zinc-400"
             />
           ) : (
             <button
               type="button"
               onClick={() => {
-                setTimeInputValue(formatTime(currentTime, effectiveDuration <= 15 || currentTime % 1 !== 0));
+                setTimeInputValue(formatTime(currentTime, effectiveDuration <= 15 || hasFraction(currentTime)));
                 setIsEditingTime(true);
               }}
               title="Click to edit current time"
               className="font-bold text-gray-200 hover:text-white hover:bg-white/5 cursor-text transition-colors px-1 py-0.5 rounded"
             >
-              {formatTime(currentTime, effectiveDuration <= 15 || currentTime % 1 !== 0)}
+              {formatTime(currentTime, effectiveDuration <= 15 || hasFraction(currentTime))}
             </button>
           )}
           <span className="text-gray-600">/</span>
           <span className="text-gray-400">
-            {formatTime(effectiveDuration, effectiveDuration <= 15 || effectiveDuration % 1 !== 0)}
+            {formatTime(effectiveDuration, effectiveDuration <= 15 || hasFraction(effectiveDuration))}
           </span>
+          {/* Loop on: the clip repeats while you adjust it. Off: it plays once and stops at the end. */}
+          <button
+            type="button"
+            onClick={() => setLoopOn(!loopOn)}
+            aria-pressed={loopOn}
+            aria-label={loopOn ? 'Loop clip: on' : 'Loop clip: off'}
+            title={loopOn ? 'Loop on: the clip plays again and again. Click to play it once.' : 'Loop off: the clip plays once and stops at the end. Click to loop.'}
+            className={`ml-1 flex items-center gap-1 rounded px-1.5 py-0.5 font-sans text-[10px] font-bold uppercase tracking-wide transition-colors cursor-pointer ${
+              loopOn ? 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30' : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+            }`}
+          >
+            <Repeat className="w-3 h-3" />
+            <span>{loopOn ? 'Loop' : 'Once'}</span>
+          </button>
         </div>
 
         {/* Right Controls: Preview Quality Selection (Hidden for YouTube links) */}

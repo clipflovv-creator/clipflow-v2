@@ -44,21 +44,8 @@ import { useEditorPlayback } from '../hooks/editor/useEditorPlayback';
 
 import { getAudioTrackScore } from '../services/audioTracks';
 import { formatCaptions, trimCues, type CaptionFormat } from '../services/captions';
+import { formatTime } from '../utils/timecode';
 
-function formatTime(seconds: number, includeDecimals: boolean = false): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-
-  if (h > 0) {
-    const main = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    return includeDecimals ? `${main}.${ms}` : main;
-  }
-  const main = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return includeDecimals ? `${main}.${ms}` : main;
-}
 
 export default function ClipFlowEditor() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -169,6 +156,8 @@ export default function ClipFlowEditor() {
   });
 
   const [isTrimEnabled, setIsTrimEnabled] = useState<boolean>(true);
+  // End of the last automatic (full-video) range, so later metadata updates can tell it from a user range.
+  const autoTrimEndRef = useRef<number | null>(null);
   const [trimRange, setTrimRange] = useState<[number, number]>(() => {
     // Shareable clip links: /editor/studio?url=...&start=3600&end=3610 (seconds)
     const qsStart = Number(searchParams.get('start'));
@@ -254,7 +243,10 @@ export default function ClipFlowEditor() {
       setActualDuration((prev) => (dur > prev || prev === 0 ? Math.round(dur) : prev));
       setTrimRange((prev) => {
         if (searchParams.has('start') && searchParams.has('end')) return prev; // range came from the link
-        if (prev[0] === 0 && (prev[1] === 60 || prev[1] === 0 || prev[1] < dur)) {
+        // Only widen a range that is still the automatic one; never undo a range the user typed or dragged.
+        const isAuto = prev[0] === 0 && (prev[1] === 60 || prev[1] === 0 || prev[1] === autoTrimEndRef.current);
+        if (isAuto && prev[1] !== Math.round(dur)) {
+          autoTrimEndRef.current = Math.round(dur);
           return [0, Math.round(dur)];
         }
         return prev;

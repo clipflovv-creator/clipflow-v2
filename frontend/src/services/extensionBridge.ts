@@ -325,7 +325,13 @@ export const extensionBridge = {
   /** Caption cues for a YouTube link (preferred language, else the first manual track, else auto). */
   getCaptions(url: string, lang?: string): Promise<{ lang: string; tracks: Array<{ lang: string; name: string; auto: boolean }>; cues: Array<{ start: number; end: number; text: string }> }> {
     console.log('[ClipFlow bridge] captions →', url, lang ?? '(default)');
-    return call({ type: 'getCaptions', url, lang }, (d) => (d.event === 'captions' ? d : undefined));
+    const once = () => call<any>({ type: 'getCaptions', url, lang }, (d) => (d.event === 'captions' ? d : undefined), 30_000);
+    // A caption request occasionally never answers (YouTube throttling); one automatic retry recovers it.
+    return once().catch((err) => {
+      if (err?.message !== 'Extension did not respond') throw err;
+      console.warn('[ClipFlow bridge] captions request stalled, retrying once');
+      return once();
+    });
   },
 
   /** Where users get the extension (self-hosted full build, zipped by extension/build.mjs). */

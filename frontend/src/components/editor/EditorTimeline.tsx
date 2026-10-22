@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import * as Slider from '@radix-ui/react-slider';
 import { Clock } from 'lucide-react';
+import { formatTime, parseTime, hasFraction, lastFrameTime } from '../../utils/timecode';
 
 interface EditorTimelineProps {
   sliderWrapRef: React.RefObject<HTMLDivElement | null>;
@@ -22,47 +23,7 @@ interface EditorTimelineProps {
   youtubePlayerRef: React.RefObject<any>;
 }
 
-function formatTime(seconds: number, includeDecimals: boolean = false): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
 
-  if (h > 0) {
-    const main = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    return includeDecimals ? `${main}.${ms}` : main;
-  }
-  const main = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return includeDecimals ? `${main}.${ms}` : main;
-}
-
-function parseTime(timeStr: string): number | null {
-  if (!timeStr || !timeStr.trim()) return null;
-  const cleanStr = timeStr.trim();
-  const parts = cleanStr.split(':');
-
-  if (parts.length === 3) {
-    const h = parseFloat(parts[0]);
-    const m = parseFloat(parts[1]);
-    const s = parts[2] === '' ? 0 : parseFloat(parts[2]);
-    if (!isNaN(h) && !isNaN(m) && !isNaN(s) && h >= 0 && m >= 0 && s >= 0 && m < 60 && s < 60) {
-      return h * 3600 + m * 60 + s;
-    }
-  } else if (parts.length === 2) {
-    const m = parseFloat(parts[0]);
-    const s = parts[1] === '' ? 0 : parseFloat(parts[1]);
-    if (!isNaN(m) && !isNaN(s) && m >= 0 && s >= 0 && s < 60) {
-      return m * 60 + s;
-    }
-  } else if (parts.length === 1) {
-    const s = parseFloat(parts[0]);
-    if (!isNaN(s) && s >= 0) {
-      return s;
-    }
-  }
-  return null;
-}
 
 interface TimeBoxInputProps {
   value: number;
@@ -87,9 +48,8 @@ function TimeBoxInput({
   const handleCommit = () => {
     setIsEditing(false);
     const parsed = parseTime(rawText);
-    if (parsed !== null && !isNaN(parsed) && isValid(parsed)) {
-      onCommit(parsed);
-    }
+    if (parsed !== null && isValid(parsed)) onCommit(parsed);
+    else if (rawText.trim() && rawText !== formattedValue) console.warn('[ClipFlow editor] ignored time input', JSON.stringify(rawText));
   };
 
   return (
@@ -113,7 +73,7 @@ function TimeBoxInput({
         }
       }}
       onBlur={handleCommit}
-      className="w-16 bg-black/50 border border-white/10 rounded-lg px-1.5 py-1 text-center text-zinc-200 font-bold focus:outline-none focus:border-zinc-400 text-[11px]"
+      className="w-20 bg-black/50 border border-white/10 rounded-lg px-1.5 py-1 text-center text-zinc-200 font-bold focus:outline-none focus:border-zinc-400 text-[11px]"
     />
   );
 }
@@ -137,6 +97,8 @@ export function EditorTimeline({
   videoElementRef,
   youtubePlayerRef,
 }: EditorTimelineProps) {
+  // Which trim handle is being dragged (0 start, 1 end), so the commit shows that handle's frame.
+  const draggedThumbRef = useRef<0 | 1 | null>(null);
   const startPct = effectiveDuration > 0 ? (trimRange[0] / effectiveDuration) * 100 : 0;
   const widthPct = effectiveDuration > 0 ? ((trimRange[1] - trimRange[0]) / effectiveDuration) * 100 : 100;
   const currentPct = effectiveDuration > 0 ? (currentTime / effectiveDuration) * 100 : 0;
@@ -227,6 +189,8 @@ export function EditorTimeline({
             step={effectiveDuration <= 30 ? 0.1 : 0.5}
             minStepsBetweenThumbs={0.1}
             onValueChange={(val) => {
+              if (val[0] !== trimRange[0]) draggedThumbRef.current = 0;
+              else if (val[1] !== trimRange[1]) draggedThumbRef.current = 1;
               (isSeekingRef as any).current = true;
               (lastSeekTimeRef as any).current = Date.now();
               setTrimRange([val[0], val[1]]);
@@ -248,18 +212,22 @@ export function EditorTimeline({
                   try { videoElementRef.current.currentTime = val[0]; } catch {}
                 }
               } else if (val[1] !== trimRange[1]) {
-                setCurrentTime(val[1]);
-                (pendingSeekTimeRef as any).current = val[1];
+                // Dragging the end handle: show the clip's last frame (the frame just before the end time).
+                const last = lastFrameTime(val[0], val[1]);
+                setCurrentTime(last);
+                (pendingSeekTimeRef as any).current = last;
                 if (youtubeId && youtubePlayerRef.current) {
-                  try { youtubePlayerRef.current.seekTo(val[1], true); } catch {}
+                  try { youtubePlayerRef.current.seekTo(last, true); } catch {}
                 } else if (videoElementRef.current) {
-                  try { videoElementRef.current.currentTime = val[1]; } catch {}
+                  try { videoElementRef.current.currentTime = last; } catch {}
                 }
               }
             }}
             onValueCommit={(val) => {
               setTrimRange([val[0], val[1]]);
-              pauseAndSeek(val[0]);
+              // Stay on the handle that was moved: start handle → first frame, end handle → last frame.
+              pauseAndSeek(draggedThumbRef.current === 1 ? lastFrameTime(val[0], val[1]) : val[0]);
+              draggedThumbRef.current = null;
             }}
           >
             <Slider.Track className="relative flex-grow h-full rounded-xl cursor-pointer">
@@ -301,10 +269,14 @@ export function EditorTimeline({
             <TimeBoxInput
               ariaLabel="Trim Start Time"
               value={trimRange[0]}
-              includeDecimals={effectiveDuration <= 15 || trimRange[0] % 1 !== 0}
-              isValid={(val) => val >= 0 && val < trimRange[1]}
+              includeDecimals={effectiveDuration <= 15 || hasFraction(trimRange[0])}
+              isValid={(val) => val >= 0 && val < (effectiveDuration > 0 ? effectiveDuration : Infinity)}
               onCommit={(val) => {
-                setTrimRange([val, trimRange[1]]);
+                // Start moved past the end → move the end too, keeping the clip length.
+                const max = effectiveDuration > 0 ? effectiveDuration : Infinity;
+                const len = Math.max(0.1, trimRange[1] - trimRange[0]);
+                const end = val < trimRange[1] ? trimRange[1] : Math.min(max, val + len);
+                setTrimRange([val, end]);
                 pauseAndSeek(val);
               }}
             />
@@ -312,12 +284,15 @@ export function EditorTimeline({
             <TimeBoxInput
               ariaLabel="Trim End Time"
               value={trimRange[1]}
-              includeDecimals={effectiveDuration <= 15 || trimRange[1] % 1 !== 0}
-              isValid={(val) => val > trimRange[0] && val <= (effectiveDuration > 0 ? effectiveDuration : 9999)}
+              includeDecimals={effectiveDuration <= 15 || hasFraction(trimRange[1])}
+              isValid={(val) => val > 0}
               onCommit={(val) => {
-                const endVal = Math.min(effectiveDuration > 0 ? effectiveDuration : 9999, val);
-                setTrimRange([trimRange[0], endVal]);
-                pauseAndSeek(trimRange[0]);
+                const endVal = Math.min(effectiveDuration > 0 ? effectiveDuration : Infinity, val);
+                // End moved before the start → move the start too, keeping the clip length.
+                const len = Math.max(0.1, trimRange[1] - trimRange[0]);
+                const start = endVal > trimRange[0] ? trimRange[0] : Math.max(0, endVal - len);
+                setTrimRange([start, endVal]);
+                pauseAndSeek(lastFrameTime(start, endVal));   // show the clip's exact last frame
               }}
             />
           </div>

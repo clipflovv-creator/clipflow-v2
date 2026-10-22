@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import type { InstagramPlayerProps } from './types';
+import { loopPreference } from '../../../utils/loopPreference';
+import { lastFrameTime } from '../../../utils/timecode';
 
 export function InstagramPlayerView({
   videoElementRef,
@@ -79,7 +81,13 @@ export function InstagramPlayerView({
           setCurrentTime(v.currentTime);
           const clipStart = trimRange[0];
           const clipEnd = trimRange[1] > clipStart ? trimRange[1] : (effectiveDuration || clipStart + 60);
-          if (v.currentTime >= clipEnd) {
+          if (v.currentTime >= clipEnd && !loopPreference.get()) {
+            // Loop off: stop on the clip's last frame; the next play starts from the clip start.
+            if (!v.paused) v.pause();
+            audioElementRef.current?.pause();
+            v.currentTime = lastFrameTime(clipStart, clipEnd);
+            setCurrentTime(v.currentTime);
+          } else if (v.currentTime >= clipEnd) {
             v.currentTime = clipStart;
             setCurrentTime(clipStart);
             if (audioElementRef.current && activeAudioSrc) {

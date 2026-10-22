@@ -6,6 +6,7 @@ import {
   Film, ImageIcon,
 } from 'lucide-react';
 import type { EditorMobileBottomDockProps } from './types';
+import { formatTime } from '../utils/timecode';
 
 const RATIO_OPTIONS = [
   { id: '16:9',   label: '16:9',   sub: 'Landscape', Icon: RectangleHorizontal },
@@ -28,14 +29,6 @@ const BITRATE_OPTIONS = [
   { id: '128k', label: '128k', sub: 'Light'  },
 ] as const;
 
-function formatTime(seconds: number): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-}
 
 const SPRING = { type: 'spring' as const, damping: 30, stiffness: 340, mass: 0.8 };
 

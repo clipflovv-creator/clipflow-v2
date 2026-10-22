@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { YouTubePlayer } from 'react-youtube';
+import { loopPreference } from '../../utils/loopPreference';
+import { lastFrameTime } from '../../utils/timecode';
 
 export function useEditorPlayback(
   youtubeId: string | null,
@@ -20,6 +22,8 @@ export function useEditorPlayback(
   const isSeekingRef = useRef<boolean>(false);
   const pendingSeekTimeRef = useRef<number | null>(null);
   const lastSeekTimeRef = useRef<number>(0);
+  // Last time read from the YouTube player while playing (see reachedEnd in the poll loop).
+  const lastPolledYtTimeRef = useRef<number | null>(null);
   const seekOriginTimeRef = useRef<number | null>(null);
 
   const [volume, setVolume] = useState<number>(() => {
@@ -164,6 +168,7 @@ export function useEditorPlayback(
 
   const playClipFromStart = useCallback((startPos?: number) => {
     const target = startPos !== undefined ? startPos : trimRange[0];
+    lastPolledYtTimeRef.current = target;
     seekOriginTimeRef.current = currentTime;
     pendingSeekTimeRef.current = target;
     isSeekingRef.current = true;
@@ -195,9 +200,12 @@ export function useEditorPlayback(
         try { youtubePlayerRef.current.pauseVideo(); } catch (e) {}
         setIsPlaying(false);
       } else {
-        if (currentTime >= clipEnd - 0.1) {
-          youtubePlayerRef.current.seekTo(clipStart, true);
-          setCurrentTime(clipStart);
+        // At / past the end (e.g. stopped by "Once") or before the start → restart from the clip start.
+        // playClipFromStart marks the seek as pending, so the player's stale time (still at the end for a
+        // moment after seekTo) isn't mistaken for reaching the end again, which used to stop it right away.
+        if (currentTime >= clipEnd - 0.1 || currentTime < clipStart) {
+          playClipFromStart(clipStart);
+          return;
         }
         try { youtubePlayerRef.current.playVideo(); } catch (e) {}
         setIsPlaying(true);
@@ -209,16 +217,16 @@ export function useEditorPlayback(
           activeVideo.pause();
           setIsPlaying(false);
         } else {
-          if (activeVideo.currentTime >= clipEnd - 0.1) {
-            activeVideo.currentTime = clipStart;
-            setCurrentTime(clipStart);
+          if (activeVideo.currentTime >= clipEnd - 0.1 || activeVideo.currentTime < clipStart) {
+            playClipFromStart(clipStart);
+            return;
           }
           activeVideo.play().catch(() => {});
           setIsPlaying(true);
         }
       }
     }
-  }, [isPlaying, currentTime, trimRange, effectiveDuration, youtubeId, youtubePlayerRef, videoElementRef]);
+  }, [isPlaying, currentTime, trimRange, effectiveDuration, youtubeId, youtubePlayerRef, videoElementRef, playClipFromStart]);
 
   const seekRelative = useCallback((seconds: number) => {
     const maxTime = effectiveDuration > 0 ? effectiveDuration : (trimRange[1] || 99999);
@@ -245,8 +253,16 @@ export function useEditorPlayback(
           const clipStart = trimRange[0];
           const clipEnd = trimRange[1] > clipStart ? trimRange[1] : (effectiveDuration || clipStart + 60);
           if (v.currentTime >= clipEnd) {
-            v.currentTime = clipStart;
-            setCurrentTime(clipStart);
+            if (!loopPreference.get()) {   // loop off: stop on the clip's last frame; the next play starts from the clip start
+              v.pause();
+              audioElementRef.current?.pause();
+              v.currentTime = lastFrameTime(clipStart, clipEnd);
+              setCurrentTime(v.currentTime);
+              setIsPlaying(false);
+            } else {
+              v.currentTime = clipStart;
+              setCurrentTime(clipStart);
+            }
           }
         } catch (e) {}
       }
@@ -285,10 +301,22 @@ export function useEditorPlayback(
 
             const clipStart = trimRange[0];
             const clipEnd = trimRange[1] > clipStart ? trimRange[1] : (effectiveDuration || clipStart + 60);
+            // Real playback reaches the end in small steps (~0.1 s per poll). A big jump is the player still
+            // reporting its old position right after a seek, not the end of the clip.
+            const prev = lastPolledYtTimeRef.current;
+            lastPolledYtTimeRef.current = time;
+            const reachedEnd = time >= clipEnd && (prev === null || Math.abs(time - prev) < 0.6);
             if (!isSeekingRef.current) {
-              if (time >= clipEnd) {
-                youtubePlayerRef.current.seekTo(clipStart, true);
-                setCurrentTime(clipStart);
+              if (reachedEnd) {
+                if (!loopPreference.get()) {   // loop off: stop on the clip's last frame; the next play starts from the clip start
+                  youtubePlayerRef.current.pauseVideo();
+                  youtubePlayerRef.current.seekTo(lastFrameTime(clipStart, clipEnd), true);
+                  setCurrentTime(lastFrameTime(clipStart, clipEnd));
+                  setIsPlaying(false);
+                } else {
+                  youtubePlayerRef.current.seekTo(clipStart, true);
+                  setCurrentTime(clipStart);
+                }
               }
             }
           }

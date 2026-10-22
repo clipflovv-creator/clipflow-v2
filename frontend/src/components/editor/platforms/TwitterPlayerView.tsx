@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import type { TwitterPlayerProps } from './types';
+import { loopPreference } from '../../../utils/loopPreference';
+import { lastFrameTime } from '../../../utils/timecode';
 
 export function TwitterPlayerView({
   videoElementRef,
@@ -70,8 +72,14 @@ export function TwitterPlayerView({
         const clipStart = trimRange[0];
         const clipEnd = trimRange[1] > clipStart ? trimRange[1] : (effectiveDuration || clipStart + 60);
         if (v.currentTime >= clipEnd) {
-          v.currentTime = clipStart;
-          setCurrentTime(clipStart);
+          if (!loopPreference.get()) {   // loop off: stop on the clip's last frame; the next play starts from the clip start
+            if (!v.paused) v.pause();
+            v.currentTime = lastFrameTime(clipStart, clipEnd);
+            setCurrentTime(v.currentTime);
+          } else {
+            v.currentTime = clipStart;
+            setCurrentTime(clipStart);
+          }
         }
       }}
       onPlay={() => {

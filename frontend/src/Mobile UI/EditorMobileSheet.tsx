@@ -2,6 +2,7 @@ import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { MobileTab } from './types';
+import { formatTime } from '../utils/timecode';
 
 interface EditorMobileSheetProps {
   activeTab: MobileTab;
@@ -22,14 +23,6 @@ interface EditorMobileSheetProps {
   estimatedBytes: number;
 }
 
-function formatTime(seconds: number): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-}
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '';

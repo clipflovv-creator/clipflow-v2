@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import Hls from 'hls.js';
 import type { TwitchPlayerProps } from './types';
 import { extensionBridge } from '../../../services/extensionBridge';
+import { loopPreference } from '../../../utils/loopPreference';
+import { lastFrameTime } from '../../../utils/timecode';
 
 /**
  * Live playlists (when a channel has no DVR recording) carry Twitch's stitched ads: content segments are
@@ -221,8 +223,14 @@ export function TwitchPlayerView({
           const clipStart = trimRange[0];
           const clipEnd = trimRange[1] > clipStart ? trimRange[1] : (effectiveDuration || clipStart + 60);
           if (v.currentTime >= clipEnd) {
-            v.currentTime = clipStart;
-            setCurrentTime(clipStart);
+            if (!loopPreference.get()) {   // loop off: stop on the clip's last frame; the next play starts from the clip start
+              if (!v.paused) v.pause();
+              v.currentTime = lastFrameTime(clipStart, clipEnd);
+              setCurrentTime(v.currentTime);
+            } else {
+              v.currentTime = clipStart;
+              setCurrentTime(clipStart);
+            }
           }
         }}
         onPlay={() => {
