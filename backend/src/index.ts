@@ -202,6 +202,29 @@ const publicDirCandidates = [
 const publicDir = publicDirCandidates.find(p => fs.existsSync(p)) || path.join(process.cwd(), 'public');
 app.use('/public', express.static(publicDir));
 
+// Serve ClipFlow browser extension zip and static files
+app.get('/extension/clipflow-extension.zip', (_req: Request, res: Response) => {
+  const candidates = [
+    path.join(process.cwd(), 'frontend', 'public', 'extension', 'clipflow-extension.zip'),
+    path.join(process.cwd(), '..', 'frontend', 'public', 'extension', 'clipflow-extension.zip'),
+  ];
+  const zipFile = candidates.find(c => fs.existsSync(c));
+  if (!zipFile) {
+    return res.status(404).json({ error: 'Extension zip package not found' });
+  }
+  res.download(zipFile, 'clipflow-extension.zip');
+});
+
+
+const extDirCandidates = [
+  path.join(process.cwd(), 'frontend', 'public', 'extension'),
+  path.join(process.cwd(), '..', 'frontend', 'public', 'extension'),
+];
+const extDir = extDirCandidates.find(p => fs.existsSync(p));
+if (extDir) {
+  app.use('/extension', express.static(extDir));
+}
+
 // Serve production frontend bundle if built
 const frontendDist = path.join(process.cwd(), '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDist)) {

@@ -613,10 +613,10 @@ export default function ClipFlowHome() {
                 </ul>
                 <a
                   href="/extension/clipflow-extension.zip"
-                  download
-                  className="mt-auto block w-full rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2.5 text-center text-sm font-semibold text-white cursor-pointer"
+                  download="clipflow-extension.zip"
+                  className="mt-auto block w-full rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-2.5 text-center text-sm font-semibold text-white cursor-pointer shadow-lg shadow-blue-600/20 transition-all"
                 >
-                  Get the free extension
+                  Get the free extension (.zip)
                 </a>
               </div>
             </div>

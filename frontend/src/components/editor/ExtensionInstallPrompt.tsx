@@ -58,8 +58,14 @@ export default function ExtensionInstallPrompt({ onClose, onDetected, reason = '
               <a href={extensionBridge.storeUrl} target="_blank" rel="noopener noreferrer"
                 className="block w-full rounded-xl bg-blue-600 px-4 py-2.5 text-center font-semibold text-white hover:bg-blue-500">Add to Chrome</a>
             )}
-            <a href={extensionBridge.installUrl} download
-              className="block w-full rounded-xl bg-blue-600 px-4 py-2.5 text-center font-semibold text-white hover:bg-blue-500">Download extension (.zip)</a>
+            <a
+              href={extensionBridge.installUrl}
+              download="clipflow-extension.zip"
+              className="flex items-center justify-center gap-2 w-full rounded-xl bg-blue-600 px-4 py-2.5 text-center font-semibold text-white hover:bg-blue-500 shadow-md shadow-blue-600/20 transition-all cursor-pointer"
+            >
+              <span>Download Extension (.zip)</span>
+            </a>
+
             <ol className="list-decimal space-y-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-4 pl-8 text-xs text-slate-300">
               <li>Unzip the downloaded file.</li>
               <li>Open <span className="rounded bg-white/10 px-1 font-mono text-white">chrome://extensions</span> in a new tab.</li>

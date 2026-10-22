@@ -124,13 +124,17 @@ if (build === 'full') {
   fs.mkdirSync(zipDir, { recursive: true });
   fs.rmSync(zipPath, { force: true });
   try {
-    // Windows 10+ ships bsdtar (System32\tar.exe), which writes .zip with -a; elsewhere use zip.
-    const cmd = process.platform === 'win32'
-      ? `"${path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'tar.exe')}" -a -cf "${zipPath}" -C "${outdir}" .`
-      : `cd "${outdir}" && zip -qr "${zipPath}" .`;
-    execSync(cmd, { stdio: 'ignore' });
+    if (process.platform === 'win32') {
+      const psOut = outdir.replace(/'/g, "''");
+      const psZip = zipPath.replace(/'/g, "''");
+      const cmd = `powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory('${psOut}', '${psZip}')"`;
+      execSync(cmd, { stdio: 'ignore' });
+    } else {
+      const cmd = `cd "${outdir}" && zip -qr "${zipPath}" *`;
+      execSync(cmd, { stdio: 'ignore' });
+    }
     console.log(`zipped → ${path.relative(process.cwd(), zipPath)}`);
   } catch (err) {
-    console.warn('could not zip the extension (tar -a unavailable):', err.message);
+    console.warn('could not zip the extension:', err.message);
   }
 }
